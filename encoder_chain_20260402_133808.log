@@ -1,0 +1,28 @@
+[PING] id=7: online
+[MODE] id=7 -> IDLE
+
+Rotate the motor by hand and watch which fields change.
+Ctrl+C to stop.
+
+[00001] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00002] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00003] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00004] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00005] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00006] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00007] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00008] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00009] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00010] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00011] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00012] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00013] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00014] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00015] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00016] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00017] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00018] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00019] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00020] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00021] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000
+[00022] upd=       0  raw=           0  nrot=       0  enc_pos=   +0.000000  enc_vel=   +0.000000  pos_meas=   +0.000000  vel_meas=   +0.000000

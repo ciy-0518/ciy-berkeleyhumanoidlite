@@ -1,0 +1,59 @@
+# 팔 관절 설정 파일
+# limit 값: 실측값 기준, 안전 여유 5% 적용
+# direction: +1=정방향 유지, -1=방향 반전
+
+left_arm:
+  direction: -1
+  joints:
+    - id: 1
+      name: shoulder_pitch
+      limit_upper:  0.484    # 실측  +0.509
+      limit_lower: -0.565    # 실측  -0.595
+
+    - id: 3
+      name: shoulder_roll
+      limit_upper:  0.602    # 실측  +0.634
+      limit_lower:  0.0      # 실측   0.0
+
+    - id: 5
+      name: shoulder_yaw
+      limit_upper:  1.606    # 실측  +1.690
+      limit_lower: -1.514    # 실측  -1.593
+
+    - id: 7
+      name: elbow_pitch
+      limit_upper:  0.147    # 실측  +0.155 (팔 위로)
+      limit_lower: -1.601    # 실측  -1.685 (팔 아래로)
+
+    - id: 9
+      name: wrist_yaw
+      limit_upper:  1.575    # 실측  +1.658
+      limit_lower: -1.561    # 실측  -1.643
+
+right_arm:
+  direction: 1
+  joints:
+    - id: 2
+      name: shoulder_pitch
+      limit_upper:  0.651    # 실측  +0.685
+      limit_lower: -0.560    # 실측  -0.589
+
+    - id: 4
+      name: shoulder_roll
+      limit_upper:  0.0      # 실측   0.0
+      limit_lower: -0.552    # 실측  -0.581
+
+    - id: 6
+      name: shoulder_yaw
+      limit_upper:  1.468    # 실측  +1.545
+      limit_lower: -1.561    # 실측  -1.643
+
+    - id: 8
+      name: elbow_pitch
+      limit_upper:  1.490    # 실측  +1.569 (팔 아래로)
+      limit_lower: -0.199    # 실측  -0.209 (팔 위로)
+
+    - id: 10
+      name: wrist_yaw
+      limit_upper:  1.556    # 실측  +1.638
+      limit_lower: -1.467    # 실측  -1.544

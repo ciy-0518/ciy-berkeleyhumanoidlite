@@ -8,3 +8,27 @@ venv/
 
 # OS
 .DS_Store
+
+# Logs, recordings and demo data (keep out of git; see README "Data")
+*.log
+*.bak
+*.bak[0-9]*
+teleop/logs/
+teleop/backup/
+teleop/**/__pycache__/
+*.npz
+*.jsonl
+
+# Training outputs / checkpoints
+outputs/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# CAD
+*.step
+*.STEP
+*.stp

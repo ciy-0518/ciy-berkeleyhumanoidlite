@@ -1,0 +1,99 @@
+{
+ "params": {
+  "left": {
+   "shoulder_pitch": [
+    0.6486678400221911,
+    -0.14925766817744765,
+    0.05745383917793999
+   ],
+   "shoulder_roll": [
+    0.7245848495842486,
+    0.1382673033859728,
+    -0.015514193244425642
+   ],
+   "shoulder_yaw": [
+    1.5186022166116704,
+    0.092275917968262,
+    -0.01618851680438481
+   ],
+   "elbow_pitch": [
+    0.0,
+    0.12291178578584334,
+    -0.003573928507472568
+   ],
+   "elbow_roll": [
+    1.904277630212614,
+    0.0,
+    -0.03856816423129767
+   ]
+  },
+  "right": {
+   "shoulder_pitch": [
+    0.5501230611892158,
+    0.24911689024423606,
+    0.03868269808113961
+   ],
+   "shoulder_roll": [
+    1.0874796477661888,
+    0.025664539057374033,
+    0.002063550344158307
+   ],
+   "shoulder_yaw": [
+    0.3544365020922168,
+    0.029693177785508375,
+    0.0005746915076497404
+   ],
+   "elbow_pitch": [
+    0.0,
+    0.09443799956174534,
+    0.03720635221900433
+   ],
+   "elbow_roll": [
+    0.8730261031538222,
+    0.0,
+    0.02107027876035661
+   ]
+  }
+ },
+ "made": "2026-11-08T21:21:02",
+ "files": [
+  "hand_free_0230.csv",
+  "hand_free_0241.csv",
+  "hand_grip_0041.csv",
+  "hand_grip_0047.csv",
+  "hand_grip_1957.csv",
+  "hand_grip_1959.csv",
+  "hand_grip_2003.csv",
+  "hand_grip_2004.csv",
+  "hand_grip_2012.csv",
+  "hand_grip_2043.csv",
+  "hand_grip_c1_0220.csv",
+  "hand_grip_c2_0235.csv",
+  "hand_grip_c3_0440.csv",
+  "hand_grip_c3_1951.csv",
+  "hand_grip_c3_2012.csv",
+  "hand_grip_off_2048.csv",
+  "hand_grip_off_2058.csv",
+  "hand_grip_on2_0048.csv",
+  "hand_grip_on_2111.csv",
+  "hand_grip_on_2119.csv",
+  "hand_table_2022.csv",
+  "hand_yaw_0120.csv",
+  "hand_yaw_1619.csv",
+  "hand_yaw_2247.csv",
+  "hand_yaw_2255.csv",
+  "live_pos_0050.csv",
+  "live_pos_0057.csv",
+  "replay_20261105_205225.csv",
+  "replay_20261105_205543.csv",
+  "replay_20261105_212330.csv",
+  "replay_20261108_201604.csv",
+  "replay_20261108_204041.csv"
+ ],
+ "rows": {
+  "left": 3631,
+  "right": 3916
+ },
+ "excluded": [],
+ "model": "처짐_i = k_el·τ_i(팔꿈치) + k_tip·τ_i(집게 끝) + c (rad, τ 는 m), tools/sag_comp.py 머리 주석"
+}

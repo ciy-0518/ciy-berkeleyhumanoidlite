@@ -38,6 +38,11 @@ POLICY = "~/cc_analysis/learn/runs/anypos_demo19j_x5/checkpoints/last/pretrained
 UNIFIED = "--sag-comp --no-grip-warm --grip-open-first --tip-cap-deg 18 --tip-offset-cm L 3 0 0 R 3 0 0 --place-tip-offset-cm R -2 0 0 --carry-lift-cm R 2"
 HANDOVER_DEPTH = "--handover-depth-cm 3.3 --handover-depth-max-cm 3"
 POLICY_ONLY = "--policy-end-after-release 2 --policy-max-s 40 --policy-obs sag-model --policy-can-basis encoder-nocorr"
+# 19-x18 위쪽 잡기 (top) 명령에만: R 을 열 때 R 집게 끝 실측 높이가 의도 높이와 0.5 cm 안이 될 때까지 (최대 1 초) 열기를 늦춘다 (replay_run --open-settle-cm)
+PLACE_SETTLE = "--open-settle-cm 0.5 --open-settle-max-s 1.0"
+# 19-x19 위쪽 잡기 (top) 명령에만: 집게 끝 오프셋을 어깨 roll 실물 멈춤 각 안에서 나머지 관절로 낸다 (replay_run --tip-roll-stop)
+TIP_ROLL_STOP = "--tip-roll-stop"
+RUN_STEP = "**순서: 명령 실행 → 첫 자세 도착 → 15 초 안에 캔을 십자선에 놓기.** 캔을 먼저 놓고 시작하지 않습니다 (첫 자세로 올라가는 팔이 캔을 칠 수 있음, 19-x17 판 2 · 3)"   # 19-x18 실행표 맨 위 (판마다)
 DEMOS = HOME / "cc_analysis/learn/data/vcan_demo19j/files_ho.txt"      # 19-j2 검사 통과 21 판 (anypos_demo19j_x5 학습에 들어간 시연)
 # 작업 지시 19-x 모드 전환 (--mode-auto, 기본 끔): 지금 점검이 L 도달로만 막히면 위쪽 잡기 지도 (config/reach_top_19x.json) 를 보고 top 정책을 쓴다
 POLICY_TOP = "~/cc_analysis/learn/runs/anypos_top19x_x5/checkpoints/last/pretrained_model"
@@ -411,10 +416,10 @@ def run_checks(ck: Checker, st, go, mode: str = "bottom", demos=None):
 
 
 # --------------------------------------------------------------------------- 명령
-def build_cmd(policy: str, st, go, log_csv: str, extra=()):
-    """real19j 실행표와 같은 꼴 (좌표 · 로그 이름만 다르다). 화면용 (~ 그대로) 문자열과 실행용 argv."""
+def build_cmd(policy: str, st, go, log_csv: str, extra=(), top: bool = False):
+    """real19j 실행표와 같은 꼴 (좌표 · 로그 이름만 다르다). 화면용 (~ 그대로) 문자열과 실행용 argv. top = 위쪽 잡기 (19-x18 PLACE_SETTLE · 19-x19 TIP_ROLL_STOP 을 붙임, 기본 끔)."""
     core = (f"~/run.sh policy {policy} --can-start {fmt(st[0])},{fmt(st[1])} --can-goal {fmt(go[0])},{fmt(go[1])} "
-            f"{UNIFIED} {HANDOVER_DEPTH} {POLICY_ONLY}")
+            f"{UNIFIED} {HANDOVER_DEPTH} {POLICY_ONLY}" + (f" {PLACE_SETTLE} {TIP_ROLL_STOP}" if top else ""))
     text = core + f" --log-csv {log_csv}" + ("".join(" " + shlex.quote(e) for e in extra))
     argv = [os.path.expanduser(w) if w.startswith("~/") else w for w in shlex.split(text)]
     return text, argv
@@ -626,7 +631,7 @@ def main() -> int:
             now = dt.datetime.now()
             name = log_name(st, go, now)
             log_csv = f"~/teleop-docs/_teleop/logs/{name}.csv"
-            cmd_text, argv = build_cmd(pol, st, go, log_csv, a.extra)
+            cmd_text, argv = build_cmd(pol, st, go, log_csv, a.extra, top=(mode == "top"))
             names = " ".join(f"({k} = {v})" for k, v in (("캔", st_named), ("목적지", go_named)) if v)
             if mode is not None:                              # 19-x
                 src = src + f" · 잡기 모드 {mode} ({'위쪽 잡기 — L 이 캔 위쪽, R 이 아래쪽' if mode == 'top' else '지금 방식 — L 아래쪽, R 위쪽'})"

@@ -795,6 +795,10 @@ SHOULDER_TWIST_AXIS = np.array([0.0, 1.0, 0.0])
 DEFAULT_DIVERGENCE_THRESHOLD_RAD = 1.0
 
 START_LIMIT_TOLERANCE_RAD = 0.25
+# 작업 지시 19-x18 어깨 roll 실물 멈춤 (모터 각 °, command_target · 로그 cmd · meas 열과 같은 틀). top · --grasp-real 일 때만 명령을 이 안으로 묶는다.
+ROLL_STOP_DEG = {"left": -19.0, "right": 1.4}      # left = 아래 끝 (몸 쪽), right = 위 끝 (몸 쪽)
+ROLL_STOP_BASIS = ("19-x17 실기 shift 8 판 (logs/real19x16_b01~08_shift): 인계 때 보낸 명령은 소프트웨어 한계 L -21.4 · R +5.1 에 붙고 "
+                   "엔코더는 L -19.0 · R +1.4 에서 멈춤 (로그 전체 L 최소 -19.4, R 최대 +1.5). 사용자 확인: 위팔 · 팔꿈치 몸체가 몸통 세로 알루미늄 프레임에 닿음 (기계 걸림)")
 
 # Delay between pressing 'c' and actually capturing the VR neutral pose.
 # The operator needs to move their hand to the keyboard to press 'c',
@@ -1480,6 +1484,10 @@ class DualArmMotorController:
         self.start_ramp_t = 0.0
         self.gap_blocks = 0                 # 막은 횟수 (로그용, 누적)
         self.yaw_holds = 0                  # 비틀기가 못 돌아와 어깨 앞뒤를 멈춘 횟수 (누적)
+        # 작업 지시 19-x18 어깨 roll 실물 멈춤 (top · --grasp-real 일 때만). side → (아래, 위) 모터 rad, 관절 한계 안쪽에서 한 번 더 묶는다. None 이면 끔
+        self.roll_stop: Optional[Dict[str, Tuple[float, float]]] = None
+        self.roll_stop_hit: Dict[str, bool] = {}   # 마지막 update_targets 에서 묶임이 걸린 팔
+        self.roll_stop_count = 0                   # 묶임이 걸린 걸음 수 (누적)
 
         all_ids = [dev for side in self.sides for dev in self.motor_ids[side]]
         if len(all_ids) != len(set(all_ids)):
@@ -1653,6 +1661,13 @@ class DualArmMotorController:
                     low,
                     high,
                 )
+                if self.roll_stop is not None and joint == "shoulder_roll" and side in self.roll_stop:   # 19-x18 (켤 때만)
+                    stop_lo, stop_hi = self.roll_stop[side]
+                    stopped = clamp(desired, stop_lo, stop_hi)
+                    self.roll_stop_hit[side] = stopped != desired
+                    if stopped != desired:
+                        self.roll_stop_count += 1
+                    desired = stopped
                 previous = self.previous_target[side][joint]
                 target = previous + clamp(desired - previous, -max_step, max_step)
                 self.command_target[side][joint] = target
@@ -3535,6 +3550,14 @@ def main() -> None:
     )
 
     motor.dry_run_base = {side: dict(robot_ref.rest[side]) for side in sides}
+    if args.grasp_mode == "top" and args.grasp_real:            # 19-x18: 어깨 roll 몸 쪽 끝을 실물 멈춤 각으로 (top · 실물 기준일 때만)
+        motor.roll_stop = {s: ((math.radians(ROLL_STOP_DEG[s]), math.inf) if s == "left" else (-math.inf, math.radians(ROLL_STOP_DEG[s])))
+                           for s in sides if s in ROLL_STOP_DEG}
+        print(f"[ROLL] 어깨 roll 실물 멈춤 (19-x18): " + ", ".join(f"{'L' if s == 'left' else 'R'} {'≥' if s == 'left' else '≤'} {ROLL_STOP_DEG[s]:+.1f}°"
+                                                              for s in motor.roll_stop) + " (모터 각, 명령을 이 안으로 묶는다)")
+        if auto is not None:
+            auto.run_info["roll_stop"] = {"deg_motor": {s: ROLL_STOP_DEG[s] for s in motor.roll_stop}, "side": {"left": "min", "right": "max"},
+                                          "basis": ROLL_STOP_BASIS}
     # REPORT_36: 비틀기 안쪽 한계(위팔 든 각) + 양팔 충돌 방지
     motor.yaw_dyn = {side: (float(robot_ref.rest[side]["shoulder_pitch"]), float(robot_ref.e90[side]["shoulder_yaw"]))
                      for side in sides}
@@ -3564,6 +3587,7 @@ def main() -> None:
         handover = HandoverGate(args.handover_when, full_m=PR.HAND_FINGER_M)
     gripper = None
     gripper_last_t = None
+    roll_said_ep = None                 # 19-x18: 어깨 끝 알림을 한 에피소드 번호 (None = 아직)
     grip_rule_kw = {}                                   # 작업 지시 14-p (켰을 때만 넘긴다)
     if args.grip_open_rule == "finger":
         grip_rule_kw = {"open_rule": "finger", "mid_open_s": args.grip_mid_open_s, "handover_guard_s": args.grip_handover_guard_s}
@@ -3687,10 +3711,14 @@ def main() -> None:
         if vcan.ready_strict:                                  # 작업 지시 16-d (--grasp-strict 와 함께)
             print(f"노란 원 (16-d)    : 🔵 잡힘에 더해 집게 가운데 덜 들어감 ≤ {VCAN.STRICT_DEPTH_CM:g} cm · 비킴 ≤ {VCAN.STRICT_SIDE_CM:g} cm 일 때만 (엄격 판정과 같은 문턱)")
         if args.viz_pair_after_grasp and robot_viz is not None:   # 작업 지시 16-d (켤 때만)
-            robot_viz.pair_gate = lambda: bool(vcan.holders)
+            robot_viz.pair_gate = vcan.viz_pair_gate               # 쥔 손이 있음 (19-x9: top 은 인계 뒤 R 혼자 들면 닫음)
+            vcan.viz_frames = lambda: robot_viz.frames             # 19-x11: top 그림 높이 맞춤 (bottom 은 쓰지 않음)
             if auto is not None and "robot_viz" in auto.run_info:
                 auto.run_info["robot_viz"]["pair_after_grasp"] = {"on": True, "ramp_s": RVIZ.PAIR_GATE_RAMP_S}
             print(f"VR 쌍 매핑 그림 (16-d): 🔵 가상 캔을 쥔 손이 없으면 그림 w = 0 ({RVIZ.PAIR_GATE_RAMP_S:g} 초에 걸쳐 바꿈), 로봇 명령 쌍 매핑은 그대로")
+        if robot_viz is not None and vcan.grasp_mode == "top":   # 19-x12: G0 원 그림 보정이 손을 따라가므로 판 패킷을 자주 (top 만)
+            robot_viz.table_period = RVIZ.TABLE_PERIOD_TOP
+            print(f"VR 판 패킷 (19-x12): 🔵 top — RVT1 {1.0 / RVIZ.TABLE_PERIOD_TOP:g} Hz (목적지 원이 손을 따라 매끈하게, 기본 {1.0 / RVIZ.TABLE_PERIOD:g} Hz)")
         if vcan.align is not None:                             # 작업 지시 14-l (켤 때만)
             print(f"잡기 정렬 (14-s)  : 🔵 먼저 잡는 손 집게 축 ⟂ 캔 축 어긋남 ≤ {vcan.align[0]:g}° (숙임 ≤ {VCAN.ALIGN_N_MAX_DEG:g}°), "
                   f"둘째 손 셋째 축 ↔ 쥔 캔 축 ≤ {vcan.align[1]:g}° + 집게 가운데 ↔ 캔 축 ≤ {vcan.align[2]:g} cm (노란 테두리도 같은 조건, 둘째 손이 쥔 캔을 밀면 알림)")
@@ -4176,6 +4204,15 @@ def main() -> None:
                 vgrip.update(now)
             if vcan is not None:           # 가상 캔: 위와 같이 읽기만 (실패해도 루프를 멈추지 않는다)
                 vcan.tick(now, motor.command_target, vgrip if vgrip is not None else gripper, state, running=motor.position_mode and not state["hold"])
+            if motor.roll_stop is not None and any(motor.roll_stop_hit.values()):   # 19-x18: 묶임이 걸리면 에피소드당 한 번 알림 (판정은 그대로)
+                ep_now = vcan.episode if vcan is not None else 0
+                if roll_said_ep != ep_now:
+                    roll_said_ep = ep_now
+                    hit = [s for s, v in motor.roll_stop_hit.items() if v]
+                    print("\n[ROLL] 어깨 끝 — " + ", ".join(f"{'왼팔' if s == 'left' else '오른팔'} roll 이 실물 멈춤 {ROLL_STOP_DEG[s]:+.1f}° 에 묶임" for s in hit)
+                          + " (더 안쪽으로 못 감, 손을 덜 모으세요)")
+                    if vcan is not None:
+                        vcan.sound("say:어깨 끝")
 
             if log_writer is not None and now - last_log >= 0.05:
                 last_log = now

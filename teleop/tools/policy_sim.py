@@ -164,6 +164,14 @@ def coord_text(xy) -> str:
 
 # 작업 지시 19-x (기본 빈 사전 = 지금 그대로): 시뮬 가상 캔에 더 넘길 인자. aug_demo · eval_pairs 의 --grasp-mode top · --grasp-real 이 채운다
 VCAN_EXTRA: dict = {}
+# 19-x20 (기본 None = 지금 그대로): 시뮬 모터 명령의 어깨 roll 실물 멈춤 (side → (아래, 위) 모터 rad). aug_demo · top_trim · eval_pairs 의 --roll-stop 이 채운다
+ROLL_STOP = None
+
+
+def roll_stop_watchdog() -> dict:
+    """워치독 ROLL_STOP_DEG (19-x18, 모터 각 L ≥ -19.0°, R ≤ +1.4°) → DualArmMotorController.roll_stop 꼴."""
+    d = W.ROLL_STOP_DEG
+    return {"left": (math.radians(d["left"]), math.inf), "right": (-math.inf, math.radians(d["right"]))}
 
 
 class SimEnv:
@@ -184,6 +192,8 @@ class SimEnv:
         m.arm_gap_min = -0.02                                     # --arm-gap-cm -2
         m.table_fn = W.make_table_clear_fn(self.ref, SIDES, self.table)
         m.dry_run_base = W.model_park_pose(self.ref, SIDES, m.table_fn)
+        if ROLL_STOP is not None:                                 # 19-x20 (켤 때만): 워치독 dry-run 과 같은 자리 (update_targets) 에서 묶는다
+            m.roll_stop = dict(ROLL_STOP)
         self.motor = m
         self.jm = DE.JointMap(self.ref)
         q_of = W.motor_to_urdf_fn(self.ref, SIDES)
@@ -247,7 +257,8 @@ def first_pose(records=None) -> np.ndarray:
 
 def rollout(policy, name: str, max_s: float = 60.0, move_s: float = 3.0, out_dir: Path = OUT, align=True, ref_path=None,
             start: str = "L1", goal: str = "R1", pose_jitter_deg: float = 0.0, can_jitter_cm: float = 0.0, seed: int = 0,
-            meas_sim: bool = False, strict: bool = False, align_axis_cm: float = 1.5, cond_goal: Optional[str] = None, first=None) -> dict:
+            meas_sim: bool = False, strict: bool = False, align_axis_cm: float = 1.5, cond_goal: Optional[str] = None, first=None,
+            assist: Optional[dict] = None, grasp_assist: Optional[dict] = None) -> dict:
     rng = np.random.default_rng(seed)
     can_off = tuple(rng.uniform(-can_jitter_cm, can_jitter_cm, 2)) if can_jitter_cm > 0 else (0.0, 0.0)
     env = SimEnv(start=start, goal=goal, ref_path=ref_path, align=align, timeout_s=max_s, align_axis_cm=align_axis_cm, strict=strict, can_offset_cm=can_off)
@@ -273,6 +284,16 @@ def rollout(policy, name: str, max_s: float = 60.0, move_s: float = 3.0, out_dir
         s = 0.5 - 0.5 * math.cos(math.pi * (k + 1) / n_move)
         env.step(q0 + (q1 - q0) * s, (0, 0), running=False)
     policy.reset()
+    ha = None
+    if assist is not None:                                      # 19-x21 (켤 때만): top 인계 보정 + L 여는 안전 (tools/handover_assist.py)
+        import handover_assist as HA
+        _gvc = VCAN.VirtualCan(env.table, "L1", env.ref, SIDES, W.motor_to_urdf_fn(env.ref, SIDES), log=lambda s: None, grasp_mode="top", real=True)
+        ha = HA.HandoverAssist(assist, _gvc, env.limits["right"], (-math.inf, math.radians(W.ROLL_STOP_DEG["right"])), extra_cm=VCAN.HANDOVER_HEIGHT_EXTRA_CM)
+    ga = None
+    if grasp_assist is not None:                                # 19-x22 (켤 때만): top L 잡기 보정 (tools/handover_assist.GraspAssist)
+        import handover_assist as HA
+        _gvc2 = VCAN.VirtualCan(env.table, "L1", env.ref, SIDES, W.motor_to_urdf_fn(env.ref, SIDES), log=lambda s: None, grasp_mode="top", real=True)
+        ga = HA.GraspAssist(grasp_assist, _gvc2, env.limits["left"], (math.radians(W.ROLL_STOP_DEG["left"]), math.inf))
     rows = []
     t0, wall = env.now, time.time()
     blocks0 = (env.motor.table_blocks, env.motor.gap_blocks)
@@ -283,6 +304,30 @@ def rollout(policy, name: str, max_s: float = 60.0, move_s: float = 3.0, out_dir
         a = policy.act(state, envs)
         q_t = np.asarray(a[:10], float).reshape(2, 5)
         want = (int(a[10] > 0.5), int(a[11] > 0.5))
+        if ga is not None:                                      # 19-x22: L 목표 · L 그리퍼 (가상 캔 자리, 아직 안 쥐었을 때)
+            qLp = env.jm.to_motor("left", dict(zip(JOINTS, q_t[0])))
+            qL_o, wL = ga.step(env.now - t0, qLp, dict(env.motor.command_target["left"]), int(want[0]), "left" in env.vcan.holders,
+                               env.vcan.pos.copy(), 1.0 / L.FPS, align=env.vcan.align)
+            u0 = env.jm.to_urdf("left", qL_o)
+            q_t = q_t.copy()
+            q_t[0] = [u0[j] for j in JOINTS]
+            want = (int(wL), want[1])
+        if ha is not None:                                      # 19-x21: R 목표 · 그리퍼를 규칙이 고친다 (L 관절은 정책 그대로)
+            vc_ = env.vcan
+            L_held = "left" in vc_.holders
+            can_p = can_r = None
+            if L_held and "left" in vc_._hands:                 # 가정 B 자리 (L 집게 축 가운데로 옮긴 캔) — 실물 기준 판정과 같은 자리
+                can_p = vc_.pos - float(vc_._grip_j.get("left", 0.0)) * vc_._hands["left"][1][:, 1]
+                can_r = vc_.rot.copy()
+            qRp = env.jm.to_motor("right", dict(zip(JOINTS, q_t[1])))
+            ct = env.motor.command_target
+            grab = {"can_pos": vc_.pos.copy(), "can_rot": vc_.rot.copy(), "align": vc_.align, "held_both": ("left" in vc_.holders and "right" in vc_.holders)} if L_held else None
+            qR_o, w_o = ha.step(env.now - t0, dict(ct["left"]), qRp, dict(ct["right"]), {"L": want[0], "R": want[1]}, L_held,
+                                bool(env.grip.frac(env.now)[1] >= 0.999), can_p, can_r, 1.0 / L.FPS, grab=grab)
+            u = env.jm.to_urdf("right", qR_o)
+            q_t = q_t.copy()
+            q_t[1] = [u[j] for j in JOINTS]
+            want = (int(w_o["L"]), int(w_o["R"]))
         rows.append({"t": env.now - t0, "q": env.q_urdf(), "motor": np.array([[env.motor.command_target[s][j] for j in JOINTS] for s in SIDES]),
                      "grip": np.array(want, float), "grip_deg": env.grip.deg(env.now), "can_pos": env.vcan.pos.copy(), "can_quat": env.vcan.q.copy(),
                      "can_state": env.vcan.state, "q_target": q_t})
@@ -312,6 +357,10 @@ def rollout(policy, name: str, max_s: float = 60.0, move_s: float = 3.0, out_dir
         summary.update({"start": start, "goal": goal, "cond": pcond, "cond_goal": cond_goal or goal, "seed": seed, "can_offset_cm": [round(float(v), 2) for v in can_off],
                         "final_can_cm": [round(float(v), 2) for v in env.vcan.pos], "final_minus_goal_cm": [round(float(v), 2) for v in (env.vcan.pos - gb)[:2]] if gb is not None else None,
                         "strict": {k: result.get(k) for k in result if str(k).startswith("strict_")} if strict else None})
+    if ha is not None:                                          # 19-x21 (켤 때만)
+        summary["assist"] = dict(ha.info, state=ha.st)
+    if ga is not None:                                          # 19-x22 (켤 때만)
+        summary["grasp_assist"] = dict(ga.info, state=ga.st)
     if VCAN_EXTRA.get("real"):                                  # 19-x (켤 때만): 실물 기준 판정
         summary["real"] = {k: result.get(k) for k in result if str(k).startswith("real_")}
     summary["why"] = why_text(summary)

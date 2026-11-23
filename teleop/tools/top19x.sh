@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# 19-x: 위쪽 잡기 시연 → 점검 (top_check.py) → 내보내기 (demo_export) → 증강 (19-c2 설정 + 위쪽 잡기 지도 + 실물 기준) → 데이터셋 ×5
+# 19-x: 위쪽 잡기 시연 → 점검 (top_check.py) → 내보내기 (demo_export) → 누름 편집 (press_edit.py, 19-x7) → 증강 (19-c2 설정 + 위쪽 잡기 지도 + 실물 기준) → 데이터셋 ×5
 #        → 학습 (anypos_top19x_x5) → 시뮬 평가 (위쪽 잡기 · 실물 기준) → 실기 계획 real19x → 보고.
 #   tools/top19x.sh <dry-run 기록 이름 …>        예: tools/top19x.sh dry_vcan_2130 dry_vcan_2215
 #   (기록은 ~/run.sh dry --pairs config/pairs_top_19x.txt --grasp-mode top --grasp-real --start-gate 로 모은 것)
 # 설정은 19-c2 · 19-j2 와 같다: STEPS 30000 · COPIES 9 · SHIFT_CM 3 · 시도 4, 데이터셋 --cond xy --meas-sim --copies 3, 학습 ACT 묶음 20 · 배치 32 · seed 1,
 #   평가 config/pairs_top_eval_19x.txt 6 쌍 × N 3 (--meas-sim). 다른 점: 증강 · 평가 모두 --grasp-mode top --grasp-real, 범위 지도 config/reach_top_19x.json.
-# 환경 변수: STEPS COPIES SHIFT_CM N FROM (check · export · aug · dataset · train · eval · plan · report)
+# 환경 변수: STEPS COPIES SHIFT_CM N FROM (check · export · edit · aug · dataset · train · eval · plan · report)
+#   REACH_MIN (19-x15, 기본 2,2 = 지금 그대로): 증강이 받는 범위 지도 칸 하한 L,R (aug_demo --reach-min). 2,1 = R 도착은 "되지만 여유 적음" 칸도
 # 지킴: CPU 작업 nice 19, GPU (학습 · 평가) 는 하나씩 · AC 전원일 때만 · 부팅 뒤 NVRM Xid 가 늘면 멈춤 (끝 상태 9). 학습은 tools/learn_run.sh (끝 상태 3).
 #   지금 정책 (anypos_demo19j_x5) 과 real19j 결과물은 건드리지 않는다 (이름이 모두 top19x · real19x).
 set -u
@@ -13,12 +14,13 @@ set -u
 T=$(cd "$(dirname "$0")" && pwd); TELEOP=$(dirname "$T"); PY=~/venvs/learn/bin/python
 O=~/cc_analysis/top19x/run; DATA=~/cc_analysis/learn/data/vcan_top19x; LR=~/cc_analysis/learn/lerobot; RUNS=~/cc_analysis/learn/runs
 STEPS=${STEPS:-30000}; COPIES=${COPIES:-9}; SHIFT_CM=${SHIFT_CM:-3}; N=${N:-3}; FROM=${FROM:-check}
+REACH_MIN=${REACH_MIN:-2,2}
 NAME=top19x; F=5; RUN="anypos_${NAME}_x$F"
 EVAL_PAIRS=$TELEOP/config/pairs_top_eval_19x.txt; MAP=$TELEOP/config/reach_top_19x.json
 mkdir -p "$O"; LOG=$O/run.log
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 fail() { local lg=${2:-$LOG}; say "🔴 $1"; echo "--- 마지막 오류 ($lg):"; grep -av '^\[[0-9:]*\] 🔴' "$lg" | tail -n 12 | cut -c1-300; exit 1; }
-ORDER="check export aug dataset train eval plan report"
+ORDER="check export edit aug dataset train eval plan report"
 run_step() { local s; for s in $ORDER; do [ "$s" = "$FROM" ] && return 0; [ "$s" = "$1" ] && return 1; done; return 0; }
 XID0=$(journalctl -k -b 2>/dev/null | grep -c "NVRM: Xid")
 gpu_ok() {
@@ -27,7 +29,7 @@ gpu_ok() {
   [ "$x" = "$XID0" ] || { say "🔴 NVRM Xid 가 늘었다 ($XID0 → $x) — 멈춤. 재부팅 뒤 FROM=$2 로 다시"; exit 9; }
 }
 [ $# -ge 1 ] && printf '%s\n' "$@" > "$O/records.txt"
-say "시작: $NAME  기록 $(tr '\n' ' ' < "$O/records.txt" 2>/dev/null)  (STEPS $STEPS, COPIES $COPIES, SHIFT_CM $SHIFT_CM, N $N, FROM $FROM)"
+say "시작: $NAME  기록 $(tr '\n' ' ' < "$O/records.txt" 2>/dev/null)  (STEPS $STEPS, COPIES $COPIES, SHIFT_CM $SHIFT_CM, N $N, REACH_MIN $REACH_MIN, FROM $FROM)"
 T0=$(date +%s)
 
 if run_step check; then
@@ -44,10 +46,16 @@ if run_step export; then
   say "   학습 시연 $(grep -c . "$O/files_demo.txt") 판 ($O/files_demo.txt — can_go --mode-auto 의 시연 거리도 이 목록)"
 fi
 
+if run_step edit; then
+  say "2b. 누름 편집 (놓기에서 캔이 판에 닿은 뒤 R 이 더 내려간 프레임을 판 면 높이에서 멈춤, tools/press_edit.py, 19-x7)"
+  nice -n 19 $PY -B "$T/press_edit.py" --files "$O/files_demo.txt" --out "$O/edit" --list-out "$O/files_edit.txt" >> "$LOG" 2>&1 || fail "누름 편집 실패"
+  tail -1 "$LOG" | cut -c1-300
+fi
+
 if run_step aug; then
-  say "3. 증강 (판마다 $COPIES, 원 반지름 $SHIFT_CM cm, 위쪽 잡기 지도 · 실물 기준)"
+  say "3. 증강 (판마다 $COPIES, 원 반지름 $SHIFT_CM cm, 위쪽 잡기 지도 칸 하한 L,R $REACH_MIN · 실물 기준)"
   rm -rf "$O/aug"
-  nice -n 19 $PY -B "$T/aug_demo.py" --files "$O/files_demo.txt" --copies "$COPIES" --factors 5,10 --shift-cm "$SHIFT_CM" --reach-map "$MAP" \
+  nice -n 19 $PY -B "$T/aug_demo.py" --files "$O/files_edit.txt" --copies "$COPIES" --factors 5,10 --shift-cm "$SHIFT_CM" --reach-map "$MAP" --reach-min "$REACH_MIN" \
     --grasp-mode top --grasp-real --out "$O/aug" --tag "$NAME" >> "$LOG" 2>&1 || fail "증강 실패"
   tail -1 "$LOG" | cut -c1-400
 fi

@@ -120,6 +120,7 @@ def open_sim_s(open_deg, close_deg, closed) -> float:
     return sum(abs(c - o) * SERVO_STEP_S + SERVO_SETTLE_S + 0.1 for o, c, k in zip(open_deg, close_deg, closed) if k)
 # 작업 지시 14-l --sag-comp (기본 끔): 처짐 보정 (tools/sag_comp.py). 모터가 켜진 단계에서만, 세기 0 ↔ 1 을 이 시간에 걸쳐 바꾼다
 SAG_RAMP_S = 1.0
+PSAG_RAMP_S = 0.5      # 19-x20 --place-sag-elbow-scale: R 팔꿈치 처짐 보정 비율을 바꾸는 시간 (초)
 PT_CLIP_DEG = 10.0          # 15b --policy: 안전장치가 정책 목표를 이만큼 넘게 깎은 채
 PT_CLIP_S = 1.0             #   최근 이만큼 동안
 PT_CLIP_FRAC = 0.8          #   이 비율 넘게 (10° 근처에서 오르내려 끊기는 것도 잡는다 — 15b 시험: 판 면에 막혀 9.9~11° 를 오감)
@@ -553,6 +554,9 @@ def parse() -> argparse.Namespace:
                    help="그리퍼 닫힘 각도 (14-n, 기본 config/gripper.json — 지금 60 60)")
     g.add_argument("--sag-comp", action="store_true",
                    help="처짐 보정 (14-l, 기본 끔): 목표 관절각에 처짐 예상값 (config/sag_model.json) 을 반대로 더해 보낸다. 안전장치는 보낸 명령에, 판 면은 실제로 갈 자세에도")
+    g.add_argument("--place-sag-elbow-scale", type=float, default=None, metavar="K",
+                   help="19-x20 (기본 끔): 인계가 끝나 R 만 쥔 동안 (L 이 연 뒤 ~ R 이 열 때까지, 판 면에 다가가는 동안) R 팔꿈치 처짐 보정 양을 K 배로 (0.5 초에 걸쳐). "
+                        "R 이 열면 0.5 초에 걸쳐 되돌린다. --sag-comp 와 같이 쓴다. 19-x17 실기 8 판 오프라인: K = 0 이 여는 순간 의도 대비 높이 차를 가장 줄임 (±0.5 cm 안 5 / 8)")
     g.add_argument("--sag-cap-deg", type=float, default=None, help="보정 상한 (관절당 도, 기본 10, tools/sag_comp.py CAP_DEG)")
     g.add_argument("--sag-model", default=None, help="처짐 모델 파일 (기본 config/sag_model.json)")
     g.add_argument("--sag-gain", type=float, default=1.0, metavar="G",
@@ -579,6 +583,11 @@ def parse() -> argparse.Namespace:
                    help="18-e (기본 끔): 옮기는 동안 들어 두기 'R <D>' cm (base 위쪽, 집게 끝 기준). 인계가 끝난 뒤 (그 손만 쥠, --place-tip-offset-cm 과 같은 조건) "
                         "0.5 초에 걸쳐 들고, 그 손이 열려 하면 열기 명령을 붙잡고 0.5 초에 걸쳐 내린 뒤 연다. 같은 IK·--tip-cap-deg. "
                         "정책 관측은 그대로 (가상 캔이 보는 엔코더 자세에서도 든 몫을 뺀다)")
+    g.add_argument("--open-settle-cm", type=float, default=None, metavar="D",
+                   help="19-x18 (기본 끔): R 을 열 때 R 집게 끝 실측 높이 (엔코더 FK) 가 의도 높이 (논리 목표 + 집게 끝 · 놓기 · 들기 오프셋, 처짐 보정 전) 와 "
+                        "D cm 안이 될 때까지 R 열기 명령을 늦춘다 (--open-settle-max-s 까지). 그동안 팔 명령은 그대로 따른다. 들기 (--carry-lift-cm) 가 열기를 붙잡는 동안은 "
+                        "그것이 끝난 뒤부터 잰다. 엔코더가 없으면 (dry-run) 늦추지 않는다. 집게 끝 오프셋 옵션 (--tip-offset-cm 등) 과 같이 쓴다")
+    g.add_argument("--open-settle-max-s", type=float, default=1.0, metavar="S", help="19-x18: --open-settle-cm 의 최대 늦춤 (초, 기본 1.0)")
     g.add_argument("--handover-depth-cm", type=float, default=None, metavar="S",
                    help="19-i (기본 끔): 인계 목표 깊이 (cm, 19-h 기준 3.3). R 그리퍼가 닫으려 할 때 엔코더 (dry-run 은 명령) L 자세와 L 이 잡을 때 정한 캔 자세 "
                         "(캔 시작 자리를 집게 축 가운데로) 로 R 깊이 s (virtual_can 둘째 손 판정과 같은 s) 를 재서, S 보다 얕으면 R 집게 끝 오프셋 h 에 모자란 만큼 더한다 "
@@ -587,6 +596,21 @@ def parse() -> argparse.Namespace:
     g.add_argument("--handover-depth-max-cm", type=float, default=3.0, metavar="D", help="19-i: 채우는 양 상한 (cm, 기본 3)")
     g.add_argument("--handover-depth-gap-cm", type=float, default=None, metavar="G",
                    help="19-i: 두 그리퍼 선분 (손목 → 집게 끝) 최단 거리 하한 (cm, 기본 tools/handover_depth.py GAP_MIN_CM = 5)")
+    g.add_argument("--policy-end-after-held", action="store_true",
+                   help="19-x26 (기본 끔): --policy-end-after-release 에서 가상 캔이 쥔 상태 (held_L 등) 가 된 뒤의 닫힘 → 놓음만 센다. "
+                        "없으면 캔을 쥐기 전 공중에서 닫았다 연 것도 '놓음' 으로 세어 끝난다 (19-x25 실기 판 5)")
+    g.add_argument("--grasp-assist-held-on-grasp", action="store_true",
+                   help="19-x30 (기본 끔): L 잡기 보정 (--grasp-assist) 이 'L 이 쥠' 으로 보고 꺼지는 것을 캔을 잡는 닫힘 (보정이 닫기를 허락함, 또는 가상 캔 held_*) "
+                        "일 때만으로. 없으면 정책이 공중에서 닫았다 연 것으로도 보정이 꺼진다 (19-x28 실기 판 5)")
+    g.add_argument("--grasp-tip-release-on-grasp", action="store_true",
+                   help="19-x29 (기본 끔): --grasp-tip-offset-cm 을 빼는 '다 닫힘' 을 캔을 잡는 닫힘으로만 센다 — L 잡기 보정 (--grasp-assist) 이 있으면 "
+                        "보정이 닫기를 허락한 뒤의 닫힘, 없으면 가상 캔이 쥔 상태 (held_*) 가 된 닫힘. 정책이 공중에서 닫았다 연 것으로는 빼지 않는다 (19-x28 실기 판 5)")
+    g.add_argument("--grasp-tip-skip-start-grip", action="store_true",
+                   help="19-x25 (기본 끔): --grasp-tip-offset-cm 을 빼는 '그 손이 처음 다 닫힘' 에서 재생 시작 때의 닫힘 (top 시작 관문 자세) 은 치지 않는다 — "
+                        "그 손의 처음 닫힘 → 다 열림 한 번을 건너뛰고 그 뒤 닫힘 (캔 잡기) 부터 센다. 없으면 top 정책은 시작 관문에서 바로 뺀다 (19-x24)")
+    g.add_argument("--policy-end-skip-start-grip", action="store_true",
+                   help="19-x23 (기본 끔): --policy-end-after-release 에서 재생 시작 때 닫혀 있던 그리퍼 (top 시작 관문 자세) 는 쥔 것으로 치지 않는다 — "
+                        "처음 닫힘 → 다 열림 한 번을 건너뛰고 그 뒤 닫힘부터 센다. 없으면 top 정책은 캔을 잡기 전 두 손이 열린 2 초 뒤 끝난다 (19-x23 dry-run)")
     g.add_argument("--policy-end-after-release", type=float, default=None, metavar="S",
                    help="18-e (기본 끔): 정책 실행에서 쥐었던 손이 모두 다 열린 뒤 (마지막 grip_wait 끝) S 초가 지나면 정책을 끝내고 "
                         "가상 캔 성공 때와 같은 끝 순서 (끝 자세 유지 → 수직 들기 → 주차) 로 간다")
@@ -597,6 +621,9 @@ def parse() -> argparse.Namespace:
                    help="14-ab (기본 0 = 꺼짐): 판에 놓는 열기 (그 손만 쥐고 있을 때의 열기 — 인계로 놓는 열기는 뺌) 직전 --place-lower-s 초 동안 "
                         "그 손 집게 끝을 base 아래로 0 → D cm 내리고, 열기가 끝날 때까지 유지, 연 뒤 같은 시간에 되돌린다. 판 면 검사는 그대로")
     g.add_argument("--place-lower-s", type=float, default=1.0, metavar="T", help="14-ab: 내리기·되돌리기 시간 (초, 기본 1.0)")
+    g.add_argument("--tip-roll-stop", action="store_true",
+                   help="19-x19 (기본 끔): 집게 끝 오프셋 (--tip-offset-cm · --place-tip-offset-cm · --carry-lift-cm 등 같은 IK) 을 낼 때 어깨 roll 을 실물 멈춤 각 "
+                        "(워치독 ROLL_STOP_DEG, 모터 각 L ≥ -19.0°, R ≤ +1.4°) 안에 묶고 나머지 관절 (pitch · yaw · 팔꿈치) 로 끝 위치를 맞춘다. 손 방향은 맞추지 않는다")
     g.add_argument("--tip-cap-deg", type=float, default=None, metavar="D",
                    help="14-y: --tip-offset-cm 관절당 변화 상한 (도, 기본 5 = tools/tip_offset.py CAP_DEG)")
     g.add_argument("--pause-after-close", type=float, default=0.0, metavar="S",
@@ -614,6 +641,12 @@ def parse() -> argparse.Namespace:
                         "sag-model = 처짐 모델 실제(논리 명령) — 학습 --meas-sim 과 같은 식 (command 로 놓기 앞에 멈출 때)")
     p.add_argument("--grip-open-first", action="store_true",
                    help="17-e (기본 끔): --no-grip-warm 일 때도 첫 자세에서 두 그리퍼 열기 명령을 보내고 보드가 다 열림 (지금 = 목표 = 열림) 을 알릴 때까지 기다린 뒤 캔 놓을 시간 · 재생으로 간다 (보드 없으면 시간). 워밍업을 하면 이미 열림으로 끝나므로 영향 없음")
+    p.add_argument("--handover-assist", default=None, metavar="JSON",
+                   help="19-x21 (기본 끔, 정책일 때만, top): 인계 보정 + L 여는 안전 규칙 (tools/handover_assist.py, 목표 json 예: config/handover_assist_top_19x21.json). "
+                        "L 이 닫힐 때 논리 L 자세로 캔을 붙이고 (가정 B), R 이 캔에서 가까워지면 R 을 목표 자세로 옮겨 닫는다. L 열기는 닫힌 R 의 엔코더 깊이 · 비킴이 기준 안일 때만")
+    p.add_argument("--grasp-assist", default=None, metavar="JSON",
+                   help="19-x22 (기본 끔, 정책일 때만, top): L 잡기 보정 (tools/handover_assist.GraspAssist, 목표 json 예: config/grasp_assist_top_19x22.json). "
+                        "캔 자리는 --can-start 입력 좌표 (엔코더 · 뎁스 어림 없음). L 이 아직 안 쥐었고 목표 끝에서 8 cm 안이면 L 을 목표로 옮기고, 목표 안에서만 L 닫기를 따른다")
     p.add_argument("--policy-can-basis", choices=("logical", "encoder", "encoder-nocorr"), default="logical",
                    help="정책: 가상 캔 판정 팔 자세 (17-c). logical = 논리 명령 (기본, 지금 그대로), encoder = 실기 엔코더 (오프셋 · 처짐 보정이 만든 실제 자세, dry-run 은 logical), "
                         "encoder-nocorr (18-e 추가) = 엔코더 − 보정 몫 (--grasp-tip-offset-cm · --place-tip-offset-cm · --carry-lift-cm 이 더한 관절 변화). "
@@ -708,7 +741,11 @@ def main() -> int:
                                  max_s=a.policy_max_s, limits=limits, open_deg=wa.gripper_open_deg, close_deg=wa.gripper_close_deg,
                                  dry_run=wa.dry_run, viz_target=wa.robot_viz, server_args=a.policy_server_args,
                                  **({"obs_source": a.policy_obs} if a.policy_obs != "encoder" else {}),
-                                 **({"can_basis": a.policy_can_basis} if a.policy_can_basis != "logical" else {}))
+                                 **({"can_basis": a.policy_can_basis} if a.policy_can_basis != "logical" else {}),
+                                 **({"assist": a.handover_assist} if a.handover_assist else {}),
+                                 **({"grasp_assist": a.grasp_assist} if a.grasp_assist else {}))
+            if a.grasp_assist_held_on_grasp:                           # 19-x30 (켤 때만)
+                pol.ga_held_on_grasp = True
         except (OSError, ValueError, KeyError, RuntimeError) as exc:
             print(f"[STOP] 정책: {exc}")
             return 2
@@ -769,7 +806,10 @@ def main() -> int:
     sag_off = {s: {j: 0.0 for j in W.JOINT_ORDER} for s in sides}
     sag_gain = 0.0
     sag_mult = {s: 1.0 for s in sides}          # 14-t' 배율 (팔마다)
+    psag = None                                 # 19-x20 --place-sag-elbow-scale (기본 끔): {"k", "ho": 0 / 1 두 손 쥠 / 2 R 만 쥠, "gain": 0 ~ 1}
     view = motor
+    if a.place_sag_elbow_scale is not None and not a.sag_comp:
+        print("[주의] --place-sag-elbow-scale 은 --sag-comp 와 같이 쓴다 — 끔")
     if a.sag_comp:
         import sag_comp as SAG
         try:
@@ -781,6 +821,8 @@ def main() -> int:
                 pol.close()
             return 2
         sag_mult = {s: (a.sag_gain_arm[0 if s == "left" else 1] if a.sag_gain_arm else a.sag_gain) for s in sides}
+        if a.place_sag_elbow_scale is not None and "right" in sides:          # 19-x20 (켤 때만)
+            psag = {"k": min(max(float(a.place_sag_elbow_scale), 0.0), 1.0), "ho": 0, "gain": 0.0}
 
         def table_both(side, c, f=table_plain, m=sag):
             """판 면: 보낸 명령과 실제로 갈 자세 (보낸 명령 + 예상 처짐) 둘 다 재서 엄한 쪽."""
@@ -802,9 +844,14 @@ def main() -> int:
     gtip = None                          # 18-c --grasp-tip-offset-cm (기본 끔): {"off": 팔 → h j n cm, "gain": 세기 (처음 1), "st": 0 닫히기 전 / 1 다 닫힘 (빼는 중·뺌), "t0": 닫힘 시작 시각}
     carry = None                         # 18-e --carry-lift-cm (기본 끔): {"d": 팔 → cm, "gain": 세기, "st": 0 전 / 1 같이 쥠 / 2 들어 둠 / 3 내리는 중·내림, "t0", "gate": 열기 붙잡기 요청, "dq": 든 몫 (rad)}
     grip_hold = {"on": False}            # 18-d·18-e: 그리퍼 명령을 붙잡는 중 (apply_grip 을 미룬다)
+    oset = None                          # 19-x18 --open-settle-cm (기본 끔): {"cm", "max_s", "st": 0 전 / 1 늦추는 중 / 2 보냄, "ho": 0 / 1 두 손 쥠 / 2 인계 뒤 R 만 쥠, "t0", "dz", "wait_s", "why", "gate"}
     hdep = None                          # 19-i --handover-depth-cm (기본 끔): {"hd": HandoverDepth, "st": 0 전 / 1 채우는 중 (R 닫기 붙잡음) / 2 채움 유지 / 3 빼는 중·뺌, "fill", "gain", "gate", …}
     if a.grasp_tip_release != "closed" and not a.grasp_tip_offset_cm:
         print("[주의] --grasp-tip-release 는 --grasp-tip-offset-cm 과 같이 쓴다 — 무시")
+    if a.tip_roll_stop and not (a.tip_offset_cm or a.place_tip_offset_cm or a.grasp_tip_offset_cm or a.carry_lift_cm or a.handover_depth_cm is not None):
+        print("[주의] --tip-roll-stop 은 집게 끝 오프셋 옵션 (--tip-offset-cm 등) 과 같이 쓴다 — 끔")
+    if a.open_settle_cm is not None and not (a.tip_offset_cm or a.place_tip_offset_cm or a.grasp_tip_offset_cm or a.carry_lift_cm or a.handover_depth_cm is not None):
+        print("[주의] --open-settle-cm 은 집게 끝 오프셋 옵션 (--tip-offset-cm 등) 과 같이 쓴다 — 끔")
     if a.tip_offset_cm or a.place_tip_offset_cm or a.grasp_tip_offset_cm or a.carry_lift_cm or a.handover_depth_cm is not None:
         import tip_offset as TOF
         import virtual_can as VCAN  # type: ignore
@@ -854,15 +901,38 @@ def main() -> int:
                 return 2
             if _gspec:
                 gtip = {"off": _gspec, "gain": {s: 1.0 for s in _gspec}, "st": {s: 0 for s in _gspec}, "t0": {s: None for s in _gspec}}
+                if a.grasp_tip_skip_start_grip:          # 19-x25 (켤 때만): 팔마다 0 시작 관문 닫힘 전 / 1 닫힘 봄 / 2 다 열림 봄 (이제부터 센다)
+                    gtip["arm"] = {s: 0 for s in _gspec}
                 if a.grasp_tip_release == "lift":        # 18-d: 상태 0 닫히기 전 / 1 다 닫힘 (유지) / 2 빼는 중·뺌. z0 닫힐 때 높이, tc 다 닫힌 시각, why 빼기 시작한 까닭, dz 지금 오른 높이
                     gtip.update(lift=max(0.0, float(a.grasp_tip_release_lift_cm)), z0={s: None for s in _gspec}, tc={s: None for s in _gspec},
                                 why={s: "" for s in _gspec}, dz={s: 0.0 for s in _gspec}, gate=False)
             else:
                 print("[주의] --grasp-tip-offset-cm: 값이 모두 0 이거나 그 팔을 쓰지 않는다 — 끔")
         _vc_tip = VCAN.VirtualCan(table, "L1", robot_ref, sides, _q_of)       # FK·집게 틀만 쓴다 (robot_viz 와 같은 체인)
+        if a.open_settle_cm is not None:                                         # 19-x18 (켤 때만)
+            if "right" in sides:
+                oset = {"cm": max(0.0, float(a.open_settle_cm)), "max_s": max(0.0, float(a.open_settle_max_s)), "st": 0, "ho": 0, "t0": None, "dz": float("nan"),
+                        "wait_s": 0.0, "why": "", "gate": False}
+            else:
+                print("[주의] --open-settle-cm: R 팔을 쓰지 않는다 — 끔")
         tip = TOF.TipOffset(_vc_tip.hand_of, {s: v for s, v in tip_spec.items() if s in sides},
-                            cap_deg=TOF.CAP_DEG if a.tip_cap_deg is None else float(a.tip_cap_deg))       # 14-y --tip-cap-deg
+                            cap_deg=TOF.CAP_DEG if a.tip_cap_deg is None else float(a.tip_cap_deg),       # 14-y --tip-cap-deg
+                            **({"roll_stop": {s: ((math.radians(W.ROLL_STOP_DEG[s]), math.inf) if s == "left" else (-math.inf, math.radians(W.ROLL_STOP_DEG[s])))
+                                              for s in sides if s in W.ROLL_STOP_DEG}} if a.tip_roll_stop else {}))         # 19-x19 (켤 때만)
+        if a.tip_roll_stop:
+            print("[집게 끝 오프셋] 어깨 roll 실물 멈춤 (19-x19): " + ", ".join(f"{'L' if s == 'left' else 'R'} {'≥' if s == 'left' else '≤'} {W.ROLL_STOP_DEG[s]:+.1f}°"
+                                                                        for s in sides if s in W.ROLL_STOP_DEG) + " 안에서 나머지 관절로 오프셋을 낸다")
         tip_info = {s: {"dq": {j: 0.0 for j in TOF.POS_JOINTS}, "capped": [], "moved_hjn": [0.0, 0.0, 0.0], "err_cm": 0.0} for s in sides}
+
+        def _gtip_grasp_ok(me):
+            """19-x29 (--grasp-tip-release-on-grasp): 이 닫힘이 캔을 잡는 닫힘인가. L 잡기 보정이 켜진 적이 있는 (on_t) L = 보정이 닫기를 허락함,
+            그 밖 (보정 없음 · 보정이 한 번도 안 켜짐 · R) = 가상 캔이 쥔 상태 (held_*)."""
+            tr = getattr(seq, "track", None)
+            ga = getattr(tr, "_ga", None)
+            if me == "L" and ga is not None and ga.info.get("on_t") is not None:
+                return ga.info.get("close_t") is not None
+            vc_ = getattr(tr, "vcan", None)
+            return vc_ is not None and str(tr.VCAN.STATE_NAMES[vc_.state]).startswith("held")
 
         def _gtip_z(side):
             """18-d: 그 손 집게 끝 높이 (cm, base). 엔코더 값, 없으면 (dry-run·NaN) 보낸 명령."""
@@ -972,7 +1042,9 @@ def main() -> int:
             can_corr = {s: {j: 0.0 for j in W.JOINT_ORDER} for s in sides}    # 18-e 추가: 세 보정이 더한 관절 변화 (보낼 목표 − 기본 오프셋만 넣은 목표, rad)
             pol.can_shift = can_corr
         if a.policy_end_after_release is not None:
-            pend = {"S": max(0.0, float(a.policy_end_after_release)), "held": False, "t0": None, "why": ""}
+            pend = {"S": max(0.0, float(a.policy_end_after_release)), "held": False, "t0": None, "why": "",
+                    "armed": 2 if not a.policy_end_skip_start_grip else 0,   # 19-x23 (켤 때만 0): 처음 닫힘 → 다 열림 (top 시작 관문) 한 번을 건너뛴 뒤 센다
+                    "can_held": not a.policy_end_after_held}                # 19-x26 (켤 때만 False): 가상 캔이 쥔 상태 (held_*) 가 된 뒤의 놓음만 센다
     elif a.policy_end_after_release is not None:
         print("[주의] --policy-end-after-release 는 정책 실행 (--policy) 에서만 쓴다 — 무시")
     seq = AT.AutoRun(reps * wa.replay_repeat, beeper, move_s=wa.replay_move_s, wait_s=wa.replay_wait_s, vr_guard=vr_link,
@@ -1124,10 +1196,16 @@ def main() -> int:
         header += [f"{s}_place_tip_{k}" for s in ptip["off"] for k in ("state", "gain")]
     if gtip is not None:                                                        # 18-c (켤 때만): 팔마다 상태 (0 닫히기 전 / 1 다 닫힘)·세기 1 ~ 0 (tip_gain 을 곱하기 전)
         header += [f"{s}_grasp_tip_{k}" for s in gtip["off"] for k in ("state", "gain")]
+        if "arm" in gtip:                                                       # 19-x25 (켤 때만): 시작 관문 건너뛰기 상태 0 / 1 / 2
+            header += [f"{s}_grasp_tip_arm" for s in gtip["off"]]
         if "lift" in gtip:                                                      # 18-d (lift 일 때만): 닫힌 뒤 오른 높이 cm, 빼기 시작한 까닭 (height / time / handover / open), 다른 손 닫기 붙잡는 중 1
             header += [f"{s}_grasp_tip_{k}" for s in gtip["off"] for k in ("lift_cm", "why")] + ["grasp_tip_grip_hold"]
     if carry is not None:                                                       # 18-e (켤 때만): 팔마다 상태 (0 전 / 1 같이 쥠 / 2 들어 둠 / 3 내리는 중·내림)·세기·든 양 cm, 열기 붙잡는 중 1
         header += [f"{s}_carry_{k}" for s in carry["d"] for k in ("state", "gain", "cm")] + ["carry_grip_hold"]
+    if psag is not None:                                                        # 19-x20 (켤 때만): 상태 (0 / 1 두 손 쥠 / 2 R 만 쥠), R 팔꿈치 처짐 보정 비율
+        header += ["psag_state", "psag_elbow_scale"]
+    if oset is not None:                                                        # 19-x18 (켤 때만): 상태 (0 전 / 1 늦추는 중 / 2 보냄), 실측 − 의도 높이 cm, 늦춘 시간, 보낸 까닭, 붙잡는 중
+        header += ["oset_state", "oset_dz_cm", "oset_wait_s", "oset_why", "oset_grip_hold"]
     if hdep is not None:                                                        # 19-i (켤 때만): 상태, 잰 깊이, 원한 · 채운 양, 세기, 채운 뒤 깊이 · 그리퍼 간격, 줄인 까닭, 붙잡은 시간, 붙잡는 중
         header += ["hd_state", "hd_s_cm", "hd_want_cm", "hd_fill_cm", "hd_gain", "hd_s_after_cm", "hd_gap_cm", "hd_cut", "hd_hold_s", "hd_grip_hold"]
     if can_corr is not None:                                                    # 18-e 추가 (encoder-nocorr 일 때만): 가상 캔이 보는 자세에서 뺀 보정 몫의 가장 큰 관절 값 (도)
@@ -1175,7 +1253,15 @@ def main() -> int:
                 if pend is not None and not pend["why"] and seq.stage in ("play", "grip_wait") and getattr(pol, "phase", "") == "play":     # 18-e B
                     _g = seq.track.grip_at(seq.track.tau)
                     _gs4 = gripper.state() if gripper is not None else {"L": 0, "R": 0}
-                    if _g["L"] or _g["R"] or pol.desired["L"] or pol.desired["R"] or int(_gs4["L"] or 0) or int(_gs4["R"] or 0):
+                    _any = bool(_g["L"] or _g["R"] or pol.desired["L"] or pol.desired["R"] or int(_gs4["L"] or 0) or int(_gs4["R"] or 0))
+                    if not pend["can_held"] and str(pol.VCAN.STATE_NAMES[pol.vcan.state]).startswith("held"):
+                        pend["can_held"] = True                        # 19-x26: 캔을 쥔 적이 있다
+                    if pend["armed"] < 2:                              # 19-x23: 시작 자세의 닫힘 (top 시작 관문) 은 쥔 것으로 치지 않는다
+                        if pend["armed"] == 0 and _any:
+                            pend["armed"] = 1                          # 시작 관문 닫힘을 봄
+                        elif pend["armed"] == 1 and not _any:
+                            pend["armed"] = 2                          # 다 열림 — 이제부터 센다
+                    elif _any and pend["can_held"]:
                         pend["held"], pend["t0"] = True, None          # 쥐고 있다 (다시 쥐면 처음부터 센다)
                     elif pend["held"] and seq.stage == "play":         # 모두 다 열렸다 (grip_wait 끝)
                         if pend["t0"] is None:
@@ -1267,13 +1353,21 @@ def main() -> int:
                             if tip_gain <= 0.0 or seq.stage in ("lead", "settle", "approach"):
                                 for s in gtip["off"]:                # 주차 복귀로 다 풀렸거나 다음 회차 → 처음부터 (다시 넣는다)
                                     gtip["st"][s], gtip["t0"][s] = 0, None
+                                    if "arm" in gtip:
+                                        gtip["arm"][s] = 0
                                     if "lift" in gtip:
                                         gtip["z0"][s], gtip["tc"][s], gtip["why"][s], gtip["dz"][s] = None, None, "", 0.0
                             elif seq.stage in ("play", "grip_wait") and getattr(seq, "track", None) is not None:
                                 _g = seq.track.grip_at(seq.track.tau)
                                 for s in gtip["off"]:
                                     me = "L" if s == "left" else "R"
-                                    if gtip["st"][s] == 0 and _g[me]:
+                                    if "arm" in gtip and gtip["arm"][s] < 2:   # 19-x25: 시작 관문 닫힘 → 다 열림 한 번은 치지 않는다
+                                        if gtip["arm"][s] == 0 and _g[me]:
+                                            gtip["arm"][s] = 1
+                                        elif gtip["arm"][s] == 1 and not _g[me]:
+                                            gtip["arm"][s] = 2
+                                            print(f"\n[잡는 동안 집게 끝 보정] {me} 시작 관문 닫힘을 건너뜀 — 다음 닫힘 (캔 잡기) 에서 뺀다")
+                                    elif gtip["st"][s] == 0 and _g[me] and (not a.grasp_tip_release_on_grasp or _gtip_grasp_ok(me)):
                                         if gtip["t0"][s] is None:
                                             gtip["t0"][s] = now
                                         # 다 닫힘: 그리퍼 동기면 grip_wait 가 끝나 play 로 돌아온 때, 아니면 닫는 시간 (서보 모델) 뒤
@@ -1388,8 +1482,49 @@ def main() -> int:
                                     print(f"\n[인계 깊이] R 엶 — {hdep['M'].RAMP_S:g} 초에 걸쳐 뺀다")
                             _w4 = 1.0 if hdep["st"] in (1, 2) else 0.0
                             hdep["gain"] += max(-dt / hdep["M"].RAMP_S, min(dt / hdep["M"].RAMP_S, _w4 - hdep["gain"]))
-                        if (gtip is not None and "lift" in gtip) or carry is not None or hdep is not None:      # 18-d·18-e·19-i: 붙잡기 요청이 있으면 그리퍼 명령을 미루고, 다 풀리면 그 고리에서 보낸다
-                            _want = bool((gtip is not None and gtip.get("gate")) or (carry is not None and carry["gate"]) or (hdep is not None and hdep["gate"]))
+                        if oset is not None:                         # 19-x18: R 이 열려 할 때 실측 높이가 의도 높이에 올 때까지 열기를 늦춘다
+                            if tip_gain <= 0.0 or seq.stage in ("lead", "settle", "approach") or gripper is None:
+                                oset.update(st=0, ho=0, t0=None, gate=False)
+                            elif seq.stage in ("play", "grip_wait") and getattr(seq, "track", None) is not None:
+                                _g5 = seq.track.grip_at(seq.track.tau)
+                                _d5 = getattr(seq.track, "desired", None) or _g5
+                                if _g5["L"] and _g5["R"]:                # 놓기만: 두 손이 같이 쥔 뒤 L 이 먼저 열고 R 만 쥔 상태에서 R 이 열 때 (시작 때 여는 것 · 인계 중 다시 잡기는 빼고)
+                                    oset["ho"] = 1
+                                elif oset["ho"] == 1 and not _g5["L"] and _g5["R"]:
+                                    oset["ho"] = 2
+                                _open_want = (oset["ho"] == 2 and (not _g5["R"] or not _d5.get("R")) and bool(int(gripper.state()["R"])))     # 열려 하는데 아직 열기를 안 보냄
+                                _other = bool((carry is not None and carry["gate"]) or (gtip is not None and gtip.get("gate")) or (hdep is not None and hdep["gate"]))
+                                if _open_want and not _other:
+                                    if oset["st"] != 1 and oset["st"] != 2:
+                                        oset.update(st=1, t0=now, why="")
+                                    if oset["st"] == 1:
+                                        _qi = {j: float(target["right"][j]) + tip_dq["right"].get(j, 0.0) for j in W.JOINT_ORDER}
+                                        _zi = float(_vc_tip.hand_of("right", _qi)[0][2])
+                                        _ze = float("nan")
+                                        if meas_ok:
+                                            try:
+                                                _ze = float(_vc_tip.hand_of("right", {j: float(motor.last_measured["right"][j]) for j in W.JOINT_ORDER})[0][2])
+                                            except (KeyError, TypeError, ValueError):
+                                                _ze = float("nan")
+                                        oset["dz"] = _ze - _zi
+                                        _el = now - oset["t0"]
+                                        if not math.isfinite(_ze):
+                                            oset["why"] = "엔코더 없음"
+                                        elif abs(oset["dz"]) <= oset["cm"]:
+                                            oset["why"] = "닿음"
+                                        elif _el >= oset["max_s"]:
+                                            oset["why"] = "시간"
+                                        if oset["why"]:
+                                            oset.update(st=2, wait_s=_el)
+                                            print(f"\n[놓기 늦춤] R 열기 보냄 — {_el:.2f} 초 늦춤, 실측 − 의도 높이 {oset['dz']:+.2f} cm ({oset['why']})")
+                                elif not _open_want and oset["st"] == 2:
+                                    oset.update(st=0, ho=0, t0=None)
+                                elif not _open_want and oset["ho"] == 1 and not _g5["R"]:
+                                    oset["ho"] = 0
+                                oset["gate"] = oset["st"] == 1
+                        if (gtip is not None and "lift" in gtip) or carry is not None or hdep is not None or oset is not None:      # 18-d·18-e·19-i·19-x18: 붙잡기 요청이 있으면 그리퍼 명령을 미루고, 다 풀리면 그 고리에서 보낸다
+                            _want = bool((gtip is not None and gtip.get("gate")) or (carry is not None and carry["gate"]) or (hdep is not None and hdep["gate"])
+                                         or (oset is not None and oset["gate"]))
                             if _want and not grip_hold["on"]:
                                 grip_hold["on"] = True
                                 if hooks.sync and seq.stage == "grip_wait":
@@ -1417,6 +1552,8 @@ def main() -> int:
                                 tt[s], tip_info[s] = tip.apply(s, target[s], tip_gain, extra=_ex)
                             else:
                                 tt[s], tip_info[s] = tip.apply(s, target[s], tip_gain)
+                            if pol is not None and s == "left":         # 19-x26 C: L 잡기 보정이 읽는 L 끝 오차 (rule tip_err_max_cm 일 때만 쓴다)
+                                pol.tip_err_L = float(tip_info[s].get("err_cm", 0.0))
                             if carry is not None and s in carry["d"] and carry["gain"][s] <= 0.0:
                                 for j in W.JOINT_ORDER:
                                     carry["dq"][s][j] = 0.0
@@ -1442,6 +1579,23 @@ def main() -> int:
                         want = 1.0 if (motor.position_mode and seq.stage in SAG_STAGES) else 0.0
                         sag_gain += max(-dt / SAG_RAMP_S, min(dt / SAG_RAMP_S, want - sag_gain))
                         raw = {s: sag.command_for(s, tt[s], sag_gain * sag_mult[s]) for s in sides}
+                        if psag is not None and "right" in raw:          # 19-x20: R 만 쥔 동안 R 팔꿈치 처짐 보정 양을 K 배로
+                            _w6 = 0.0
+                            if gripper is not None and seq.stage in ("play", "grip_wait") and getattr(seq, "track", None) is not None:
+                                _g6 = seq.track.grip_at(seq.track.tau)
+                                if _g6["L"] and _g6["R"]:
+                                    psag["ho"] = 1
+                                elif psag["ho"] == 1 and not _g6["L"] and _g6["R"]:
+                                    psag["ho"] = 2
+                                elif not _g6["R"] and not int(gripper.state()["R"]):
+                                    psag["ho"] = 0
+                                _w6 = 1.0 if psag["ho"] == 2 else 0.0
+                            else:
+                                psag["ho"] = 0
+                            psag["gain"] += max(-dt / PSAG_RAMP_S, min(dt / PSAG_RAMP_S, _w6 - psag["gain"]))
+                            _sc = 1.0 - psag["gain"] * (1.0 - psag["k"])
+                            _t6 = float(tt["right"]["elbow_pitch"])
+                            raw["right"]["elbow_pitch"] = _t6 + _sc * (float(raw["right"]["elbow_pitch"]) - _t6)
                     else:
                         raw = {s: dict(tt[s]) for s in sides}
                     sent = {s: dict(raw[s]) for s in sides}
@@ -1565,10 +1719,16 @@ def main() -> int:
                         row += [v for s in ptip["off"] for v in (str(ptip["st"][s]), f"{ptip['gain'][s]:.3f}")]
                     if gtip is not None:
                         row += [v for s in gtip["off"] for v in (str(gtip["st"][s]), f"{gtip['gain'][s]:.3f}")]
+                        if "arm" in gtip:
+                            row += [str(gtip["arm"][s]) for s in gtip["off"]]
                         if "lift" in gtip:
                             row += [v for s in gtip["off"] for v in (f"{gtip['dz'][s]:.2f}", gtip["why"][s])] + ["1" if gtip["gate"] else "0"]
                     if carry is not None:
                         row += [v for s in carry["d"] for v in (str(carry["st"][s]), f"{carry['gain'][s]:.3f}", f"{carry['gain'][s] * carry['d'][s] * tip_gain:.2f}")] + ["1" if carry["gate"] else "0"]
+                    if psag is not None:
+                        row += [str(psag["ho"]), f"{1.0 - psag['gain'] * (1.0 - psag['k']):.3f}"]
+                    if oset is not None:
+                        row += [str(oset["st"]), f"{oset['dz']:.2f}" if math.isfinite(oset["dz"]) else "", f"{oset['wait_s']:.2f}", oset["why"], "1" if oset["gate"] else "0"]
                     if hdep is not None:
                         _p4 = hdep["plan"]
                         row += [str(hdep["st"]), f"{_p4['s']:.2f}" if _p4 else "", f"{_p4['want']:.2f}" if _p4 else "", f"{hdep['fill']:.2f}", f"{hdep['gain']:.3f}",

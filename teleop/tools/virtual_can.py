@@ -183,6 +183,18 @@ GRASP_MODES = ("bottom", "top")
 TOP_FIRST_T_CM = (10.0, 14.0)
 TOP_SECOND_T_CM = (3.0, 5.0)
 TOP_BAND_HDR_CM = 12.0
+VIZ_HAND_LEN_CM = 13.3        # 19-x9: 언리얼 실제 크기 집게 손목 → 끝 (RobotVizProbe.cpp HandLen)
+#   19-x9: top 에서 인계 뒤 R 혼자 든 동안 목적지 자리 (G0) 그림 보정 = 지금 R 손목 → 캔 밑면 (+ 잡는 높이) 벡터 v (hand_axis = v/|v|, tip_past = 13.3 − |v|).
+#   그러면 언리얼 목적지 원 (889-892 · 901 줄) 과 잡힌 캔 그림 (1030 줄, 쌍 그림 w = 0) 의 어긋남 = 판정 캔 − G0 그대로 (그림 틀).
+#   쌍 매핑 그림 (16-d 잠금) 도 top 에서는 인계 뒤 닫는다 (viz_pair_gate): w = 1 이면 집게 · 캔을 약 5 cm 앞에 그려 원에 맞춰도 판정이 5 cm 밖이었다 (dry_vcan_2333 판 1 · 3).
+#   19-x10: v 의 높이 몫까지 쓰면 원 높이 = 판 면 + (1 − s) (손목 − 캔 밑면) 높이 → top 손목은 캔 밑면 위 약 2 ~ 6 cm 뿐이라 판 그림 (판 면 + (1 − s) GripH 8)
+#   보다 0.3 ~ 3.8 cm (그림 약 0.5 ~ 6.5 cm) 아래로 들어가 불투명한 판에 가렸다 (dry_vcan_0057). 그래서 v 의 가로 몫만 지금 손으로, 높이 몫은 모델 축
+#   (13.3 − 1.0) × 축 z 그대로 둔다: 원 높이 = 19-x8 과 같고, 가로 어긋남 (그린 캔 − 원 = 판정 캔 − G0) 은 19-x9 와 같다.
+VIZ_FADE_CM = 5.0             # 19-x11: R 이 든 캔 그림 높이 맞춤을 판정 캔이 판 위 이 안일 때만 (닿으면 다 맞춤, 위로 갈수록 0)
+#   19-x11: 판 그림은 L · R 두 팔 Raw 평균 (PlateMap, RobotVizProbe.cpp 838 · 1018 줄) 인데 G0 원 (889 줄, ArmId 1) 과 R 이 든 캔 (1030 줄) 은 R 팔 Raw 하나로 그린다.
+#   두 팔 배율이 다르면 (dry_vcan_0057: L 0.658 · R 0.583) R 틀이 판 그림보다 0.1 ~ 3.5 cm 낮아, 원이 세션 66 % 동안 판 속에 있었다 (인계 전에도).
+#   그래서 워치독이 robot_viz.frames (보내는 Range 값) 를 주면 (viz_frames) top 에서만: G0 원 높이를 판 그림 면에 (v_z 보정), R 혼자 든 캔 그림은 RVC1 AnchorTip 만 옮겨
+#   밑면 높이를 판 그림 틀의 판정 캔 높이에 (판 위 VIZ_FADE_CM 안). 판정 · 로봇 명령 · 기록 열은 그대로. 가로는 19-x9 · 19-x10 그대로.
 TOP_LIVE_AXIS_NEAR_CM = 15.0   # 19-x6: top 에서 L 끝이 캔 겉면에서 이 안이면 시작 자리 손 축 (VR 실제 크기 그림 보정, RVT1) 을 지금 L 손 축으로
 #   까닭: 언리얼은 판 위 캔을 그 자리 손 축 (auto_hand_axis = 밑 잡기 모델, 숙임 −15°) 으로 실제 크기 보정해 그린다 (RobotVizProbe.cpp 889 ~ 892).
 #   top 의 L 은 거의 수평이고 덜 돌아가 있어, 그림이 집게 축으로 0.8 ~ 1.6 cm 비켜 보였다 (dry_vcan_2046 · 2206, 예상 ↔ 실제 비킴 기울기 0.99, 잔차 0.25 cm).
@@ -194,7 +206,7 @@ TOP_ALIGN_SECOND_DEG = 32.0   # 잡기 정렬 (--grasp-align) 을 켤 때 둘째
 # 19-x4: 위쪽 잡기 실물 텔레옵 (hand_table_1920 · 1926 · 1939 · 1941, 엔코더, 인계 6 번) 으로 다시 정함:
 #   두 손 축 사이 87.9 ~ 99.3° (지금 방식 97 ~ 109 와 다름) → 85 ~ 105. R 셋째 축 ↔ L 셋째 축 (캔 축 ≈ L 셋째 축) 15.4 ~ 21.1° → R 기울기 하한 18 → 15 (6 번 중 5 번이 18 아래).
 #   누름: 19-v 실기 — 넘어진 판의 논리 누름 최소 1.11 cm, ×5 성공 판 전부 ≤ 0.86 cm → top 은 1.0 cm. 판에 닿는 순간 삑 (twist) 으로 알림 (VR 은 닿은 캔을 판 위에 멈춰 그려 손이 더 내려가는 것이 안 보인다).
-TOP_REAL_TILT_DEG = (15.0, 32.0)
+TOP_REAL_TILT_DEG = (15.0, 22.0)   # 19-x8: 상한 32 → 22 (실물 top 인계 15.4 ~ 21.1°, 19-x4 · 깊이 1.7 이면 22° 넘어 R 몸체가 캔에 들어감, 19-x7 sweep). 넘으면 "인계 각도"
 TOP_REAL_FLAT_DEG = 15.0
 TOP_REAL_AXES_DEG = (85.0, 105.0)
 TOP_REAL_PRESS_CM = 1.0
@@ -267,6 +279,9 @@ class VirtualCan:
             raise ValueError(f"grasp_mode 는 {GRASP_MODES} 중 하나")
         self.grasp_mode = grasp_mode
         self.top_live_axis = grasp_mode == "top" and bool(top_live_axis)   # 19-x6 (top 만, bottom 은 그대로)
+        self._goal_live = False                                 # 19-x9: 목적지 자리 그림 보정을 지금 R 손으로 바꿔 둔 상태
+        self.viz_frames: Optional[Callable[[], Dict[str, dict]]] = None   # 19-x11: 워치독이 robot_viz.frames 를 준다 (None = 높이 맞춤 끔, 19-x10 과 같다)
+        self.viz_can_dz = 0.0                                   # 19-x11: 마지막 RVC1 에서 R 이 든 캔 그림을 내린 양 (원시 cm, 확인용)
         self.top_band = bool(top_band)                          # 19-x3: top 의 VR 띠 높이 바꾸기 (기본 끔 — 목표 원이 판 속에 묻혔다)
         self.real = bool(real)                                  # 19-x 실물 기준 판정 (False = 끔)
         self.real_depth = float(real_depth_cm)
@@ -362,6 +377,7 @@ class VirtualCan:
         self.bumping = {s: False for s in self.sides}
         self._bump_clear_t = {s: -math.inf for s in self.sides}
         self._bump_skip = {s: False for s in self.sides}       # 놓은 직후처럼 이미 겹쳐 있던 것: 떨어질 때까지 세지 않는다
+        self._bump_jaw = {s: False for s in self.sides}        # 19-x14: 지금 접촉이 "L 집게 날만" 경고로 센 것
         self.bump_total = 0
         self.events: List[tuple] = []
         self.error: Optional[str] = None
@@ -452,6 +468,7 @@ class VirtualCan:
     def _skip_bumps(self) -> None:
         self._bump_skip = {s: True for s in self.sides}
         self.bumping = {s: False for s in self.sides}
+        self._bump_jaw = {s: False for s in self.sides}
 
     # ------------------------------------------------------------------ 그리퍼 자세
     def hand_of(self, side: str, cmd: Dict[str, float]) -> Hand:
@@ -633,19 +650,20 @@ class VirtualCan:
             self._strict_flag(f"open_{HAND_KEY[side]}", f"{who} 닫기 직전 열린 날·몸체가 캔에 {-oc:.1f} cm 들어감 (캔을 민다)", True)
         short, side_cm = self.strict_center(hand)
         st[HAND_KEY[side]] = (short, side_cm)
+        dup = self.real and self.grasp_mode == "top" and bool(self.holders)   # 19-x7: 받는 손 깊이 · 비킴은 실물 기준 (가정 B) 이 판정 — 엄격 (수직 정의) 은 경고만
         if short > STRICT_DEPTH_CM:
-            self._strict_flag(f"depth_{HAND_KEY[side]}", f"{who} 집게 가운데가 캔 축보다 {short:.1f} cm 덜 들어감 (날 끝으로 묾)", True)
+            self._strict_flag(f"depth_{HAND_KEY[side]}", f"{who} 집게 가운데가 캔 축보다 {short:.1f} cm 덜 들어감 (날 끝으로 묾)", not dup)
         if abs(side_cm) > STRICT_SIDE_CM:
-            self._strict_flag(f"side_{HAND_KEY[side]}", f"{who} 집게 가운데가 닫히는 축으로 {side_cm:+.1f} cm 비킴 (한쪽 날이 먼저 닿음)", True)
+            self._strict_flag(f"side_{HAND_KEY[side]}", f"{who} 집게 가운데가 닫히는 축으로 {side_cm:+.1f} cm 비킴 (한쪽 날이 먼저 닿음)", not dup)
 
-    def _real_flag(self, key: str, text: str) -> None:
+    def _real_flag(self, key: str, text: str, fail: bool = True) -> None:
         """19-x 실물 기준 실패 (한 에피소드에 까닭마다 한 번). 화면 + 까닭별 음성 (cue_player "say:")."""
         rl = self.ep.get("real")
         if rl is None or key in rl["flags"]:
             return
         rl["flags"].append(key)
-        rl["fail"] = True
-        self.log(f"\n[캔] 🔴 실물 기준 실패 ({REAL_SAY[key.split('_')[0]]}): {text}")
+        rl["fail"] = rl["fail"] or fail
+        self.log(f"\n[캔] {'🔴 실물 기준 실패' if fail else '⚠ 실물 기준 경고'} ({REAL_SAY[key.split('_')[0]]}): {text}")
         self.sound("say:" + REAL_SAY[key.split("_")[0]])
 
     def _depth_B(self, side: str, hand: Hand):
@@ -679,9 +697,8 @@ class VirtualCan:
         rl["depth"] = float(cb["s"])
         rl[HAND_KEY[side]] = side_cm
         if self.grasp_mode == "top":                           # 19-x2 인계 각도
-            z = self.rot[:, 2]
-            tilt = math.degrees(math.acos(min(abs(float(hand[1][:, 2] @ z)), 1.0)))
-            axes = math.degrees(math.acos(max(-1.0, min(1.0, float(self._hands[first][1][:, 0] @ hand[1][:, 0])))))
+            tilt = self._top_tilt(hand)
+            axes =math.degrees(math.acos(max(-1.0, min(1.0, float(self._hands[first][1][:, 0] @ hand[1][:, 0])))))
             rl["tilt"], rl["axes"] = tilt, axes
             if tilt < TOP_REAL_FLAT_DEG:
                 self._real_flag("flat", f"{who} 기울기 {tilt:.0f}° < {TOP_REAL_FLAT_DEG:g}° (두 손이 수평 — 놓을 때 불안정, 아래 손은 비스듬히)")
@@ -819,7 +836,8 @@ class VirtualCan:
             rl["press"] = max(rl["press"], self._press)
             lim = TOP_REAL_PRESS_CM if self.grasp_mode == "top" else REAL_PRESS_CM      # 19-x4 (top 만 1.0)
             if self._press > lim:
-                self._real_flag("press", f"잡힌 캔이 판에 닿은 뒤 손이 {self._press:.1f} cm 더 내려감 (> {lim:g}, 눌러 놓기)")
+                self._real_flag("press", f"잡힌 캔이 판에 닿은 뒤 손이 {self._press:.1f} cm 더 내려감 (> {lim:g}, 눌러 놓기)",
+                                self.grasp_mode != "top")       # 19-x7: top 은 경고만 (학습 데이터에서 press_edit.py 로 판 면에 멈춤)
         # 축을 수직으로. 축 둘레 각만 이어받아 매번 새로 만든다 (앞 회전에 곱해 쌓으면 200 Hz 로 누르는 동안 반올림이 커져 행렬이 망가졌다, 13-d 루프백)
         xa = self.rot[:, 0] if abs(float(self.rot[2, 0])) < 0.9 else self.rot[:, 1]
         xa = np.array([float(xa[0]), float(xa[1]), 0.0])
@@ -884,17 +902,24 @@ class VirtualCan:
     def _extra(self) -> float:
         return self.handover_extra if self.holders else 0.0
 
+    def _top_tilt(self, hand: Hand) -> float:
+        """19-x2 인계 각도 R 기울기 (°): 손 셋째 축 ↔ 캔 축. 닫힘 판정 (_real_on_close) 과 노란 원판 (19-x12) 이 같이 쓴다."""
+        return math.degrees(math.acos(min(abs(float(hand[1][:, 2] @ self.rot[:, 2])), 1.0)))
+
     def _update_ready(self, hands: Dict[str, Hand]) -> None:
         can = self.state != FALLEN and self._reset_due is None
         for side in self.sides:
             self.ready[side] = (can and not self.closed[side] and side not in self.holders
                                 and self.grip_check(hands[side], self._extra(), bool(self.holders), side=side)["ok"])
-            if self.ready[side] and self.ready_strict:         # 16-d (켤 때만): 엄격 2 와 같은 식·같은 문턱
+            top_real_second = self.real and self.grasp_mode == "top" and bool(self.holders)   # 19-x7: 받는 손은 실물 깊이 (가정 B) 만 본다
+            if self.ready[side] and self.ready_strict and not top_real_second:   # 16-d (켤 때만): 엄격 2 와 같은 식·같은 문턱
                 short, side_cm = self.strict_center(hands[side])
                 self.ready[side] = short <= STRICT_DEPTH_CM and abs(side_cm) <= STRICT_SIDE_CM
             if self.ready[side] and self.real and self.grasp_mode == "top" and self.holders and self.holders[0] in self._hands:   # 19-x4: 받는 손 노란 원 = 실물 기준 깊이
                 cb, side_cm = self._depth_B(side, hands[side])
-                self.ready[side] = cb["s"] >= self.real_depth and abs(side_cm) <= REAL_SIDE_CM
+                self.ready[side] = (cb["s"] >= self.real_depth and abs(side_cm) <= REAL_SIDE_CM
+                                    and TOP_REAL_TILT_DEG[0] <= self._top_tilt(hands[side]) <= TOP_REAL_TILT_DEG[1]   # 19-x12: 닫힘 인계 각도와 같은 식
+                                    and (not self.strict or self.strict_open_cm(side, hands[side]) >= -STRICT_OPEN_CM))   # 19-x14: 닫힘 엄격 open 과 같은 식 · 문턱
 
     def step(self, now: float, hands: Dict[str, Hand], grips: Dict[str, int], running: bool = True) -> None:
         """한 걸음. hands = 팔별 그리퍼 틀, grips = 팔별 0 열림 / 1 닫힘, running = 흐름 시간이 흐르는가 (위치 모드·hold 아님)."""
@@ -941,9 +966,117 @@ class VirtualCan:
             tip, R = hands["left"]
             if self.tip_dist_cm(tip) <= TOP_LIVE_AXIS_NEAR_CM:
                 self.table.cfg["can_slots"][self.slots[PAIR_START]]["hand_axis"] = [round(float(v), 4) for v in R[:, 0]]
+        if self.top_live_axis and self.pairs is not None and self.goal_name == PAIR_GOAL:   # 19-x9 (VIZ_HAND_LEN_CM 주석)
+            gs = self.table.cfg["can_slots"][self.slots[PAIR_GOAL]]
+            gx, gy = gs["base_xy_cm"]
+            a0 = auto_hand_axis("right", gx, gy)
+            v = None
+            if self.state == HELD_R and "right" in hands:
+                tip, R = hands["right"]
+                v = self.pos - (tip - GRIP_M * 100.0 * R[:, 0])      # 19-x10: 가로 몫만 지금 R 손목 → 캔 밑면
+                v[2] = (VIZ_HAND_LEN_CM - GRIP_CENTER_CM) * float(a0[2])   # 높이 몫은 모델 축 그대로
+            if self._viz_geom() is not None:                         # 19-x11: R 틀 ↔ 판 그림 (L · R 평균 틀) 높이 차를 원 높이에서 지움 (robot_viz 없으면 19-x10 그대로)
+                if v is None:
+                    v = (VIZ_HAND_LEN_CM - GRIP_CENTER_CM) * np.asarray(a0, float)
+                v[2] += self._viz_ring_dz(gs, v)
+            if v is not None:
+                n = float(np.linalg.norm(v))
+                if n > 1e-6:
+                    gs["hand_axis"] = [round(float(x) / n, 4) for x in v]
+                    gs["tip_past_axis_cm"] = round(VIZ_HAND_LEN_CM - n, 3)
+                    self._goal_live = True
+            elif self._goal_live:
+                gs["hand_axis"], gs["tip_past_axis_cm"] = a0, GRIP_CENTER_CM
+                self._goal_live = False
         self.place_ok = bool(self.holders) and not self._place_check()["why"]
         gd = self._goal_dist()
         self.in_goal = gd is not None and self.state != FALLEN and gd <= self.goal_tol
+
+    # ---- 19-x11 그림 높이 맞춤 (VIZ_FADE_CM 주석). robot_viz.frames 가 있을 때만, top 만
+    def _viz_geom(self):
+        fr = self.viz_frames() if (self.top_live_axis and self.viz_frames is not None) else None
+        if not fr or not all(s in fr for s in ("left", "right")):
+            return None
+        g = {}
+        for s in ("left", "right"):
+            o, fw, rt, up = (np.asarray(x, float) for x in fr[s]["rng"][:4])
+            rs, ps = float(fr[s]["rng"][4]), np.asarray(fr[s]["ps"], float)
+            if not (np.all(np.isfinite(np.concatenate([o, fw, rt, up, ps]))) and math.isfinite(rs) and rs > 0.0):
+                return None
+            g[s] = (o, fw, rt, up, rs, ps)
+        U = g["left"][3] + g["right"][3]
+        if float(np.linalg.norm(U)) < 1e-6:
+            return None
+        return g, U / np.linalg.norm(U)
+
+    @staticmethod
+    def _viz_raw(gs, p):                                         # RobotVizProbe Raw (원시 틀)
+        o, fw, rt, up, rs, ps = gs
+        h = (np.asarray(p, float) - ps) * rs
+        return o + fw * h[0] - rt * h[1] + up * h[2]
+
+    @staticmethod
+    def _viz_dv(gs, d):                                          # RobotVizProbe RawDir / DirW (회전만)
+        o, fw, rt, up, rs, ps = gs
+        return fw * d[0] - rt * d[1] + up * d[2]
+
+    def _viz_plate_z(self, geo, p) -> float:                     # PlateMap (1018 줄) 의 높이: L · R 평균 Raw + GripH (K − Unit)
+        g, U = geo
+        km = 0.5 * (g["left"][4] + g["right"][4])
+        gh = float(self.table.cfg.get("recommended_grip_h_cm", 8))   # RVT1 머리 GripH 와 같은 값 (table_limit.rvt_packet)
+        return float(0.5 * (self._viz_raw(g["left"], p) + self._viz_raw(g["right"], p)) @ U) + gh * (km - 1.0)
+
+    def _viz_ring_dz(self, gs: dict, v: np.ndarray) -> float:
+        """G0 원 밑 (889-892 줄: Raw_R(C − v) + Dv_R(v) − Up GripRef, R 팔 틀) 을 판 그림 면 (평균 틀) 높이로 옮길 v_z 변화 (로봇 cm).
+        밑 = 상수 + (1 − rs) Dv(v) 이므로 Δv_z = −차 / ((1 − rs) Dv(z)·U). robot_viz 없으면 0."""
+        geo = self._viz_geom()
+        if geo is None:
+            return 0.0
+        g, U = geo
+        gx, gy = gs["base_xy_cm"]
+        gh = [float(x) for x in gs.get("grip_h_cm", [])]
+        g1, g2 = (gh + [0.0, 0.0])[:2]
+        gref = 0.5 * (g1 + g2) if g2 > 0.0 else g1               # 언리얼 GripRef
+        p = np.array([gx, gy, self.table.top(gx / 100.0) * 100.0])
+        C = p + np.array([0.0, 0.0, gref])
+        base = self._viz_raw(g["right"], C - v) + self._viz_dv(g["right"], v) - U * gref
+        d = float(base @ U) - self._viz_plate_z(geo, p)
+        den = (1.0 - g["right"][4]) * float(self._viz_dv(g["right"], np.array([0.0, 0.0, 1.0])) @ U)
+        return -d / den if abs(den) > 1e-6 else 0.0
+
+    def _viz_anchor_tip(self, shown: np.ndarray, tip: np.ndarray) -> np.ndarray:
+        """R 혼자 든 캔 그림 (1030 줄, w = 0: 끝 = 손목 + 13.3 축) 밑면 높이를 판 그림 틀의 판정 캔 높이 (PlateMap) 로 맞추도록 RVC1 AnchorTip 만 옮긴다.
+        판 위 VIZ_FADE_CM 안에서만 (판에 닿을 때 다 맞춤, 위로 갈수록 0) — 높이 들면 집게 그림과 캔 그림이 따로 놀지 않게."""
+        self.viz_can_dz = 0.0
+        geo = self._viz_geom()
+        if geo is None or self.state != HELD_R or self.holders != ["right"] or self.viz_pair_gate():
+            return tip
+        fr = self.viz_frames()["right"]
+        wr, ax = np.asarray(fr["wr"], float), np.asarray(fr["ax"], float)
+        if not (np.all(np.isfinite(wr)) and np.all(np.isfinite(ax))) or float(np.linalg.norm(ax)) < 1e-6:
+            return tip
+        g, U = geo
+        base = wr + ax / np.linalg.norm(ax) * VIZ_HAND_LEN_CM + self._viz_dv(g["right"], shown - tip)
+        e = float(base @ U) - self._viz_plate_z(geo, shown)
+        h = float(shown[2]) - self.table.top(float(shown[0]) / 100.0) * 100.0
+        fade = min(max(1.0 - h / VIZ_FADE_CM, 0.0), 1.0)
+        if fade <= 0.0:
+            return tip
+        o, fw, rt, up, rs, ps = g["right"]
+        M = np.column_stack([fw, -rt, up])
+        try:
+            u = np.linalg.solve(M, U)                            # Dv(u) = U
+        except np.linalg.LinAlgError:
+            return tip
+        self.viz_can_dz = e * fade
+        return np.asarray(tip, float) + self.viz_can_dz * u
+
+    def viz_pair_gate(self) -> bool:
+        """16-d 그림용 쌍 매핑 잠금 (워치독 --viz-pair-after-grasp): 참이면 그림에 실제 쌍 w. 예전 = 쥔 손이 있음.
+        19-x9 top: 인계 뒤 R 혼자 든 동안은 닫는다 (목적지 원은 w = 0 식으로 그린다)."""
+        if self.top_live_axis:
+            return self.state in (HELD_L, HELD_BOTH)
+        return bool(self.holders)
 
     def _on_close(self, now: float, side: str, hand: Hand) -> None:
         if self.state == FALLEN or self._reset_due is not None:
@@ -961,6 +1094,11 @@ class VirtualCan:
                 self._real_on_close(side, hand, chk)
             self._attach(now, side, hand, chk)
             return
+        if self.real and self.grasp_mode == "top" and self.holders and side not in self.holders and self.active:   # 19-x7: 받는 손이 못 잡음 → 먼저 손을 열지 않게
+            hint = ""
+            if chk["reason"] == "잡는 높이":
+                hint = " 더 아래" if chk["t"] > TOP_SECOND_T_CM[1] else " 더 위"
+            self.sound("say:" + ("R" if side == "right" else "L") + " 못 잡음" + hint)
         al = {k: chk[k] for k in ("align_deg", "axis_cm", "align_lim") if k in chk}      # 14-l 정렬이 켜져 있고 나머지가 맞을 때만 있다
         self._event(now, "miss", side=side, reason=chk["reason"], t=chk["t"], j=chk["j"], s=chk["s"], n=chk["n"], tilt_deg=chk["tilt_deg"], **al)
         if al:
@@ -981,6 +1119,18 @@ class VirtualCan:
             self.log(f"\n[캔] {'왼팔' if side == 'left' else '오른팔'} 못 잡음: {chk['reason']} "
                      f"(밑면에서 {chk['t']:.1f}, 집게 축 {chk['j']:+.1f}, 끝에서 {chk['s']:.1f}, 셋째 축 {chk['n']:+.1f}, 기울기 {chk['tilt_deg']:.0f}°)")
 
+    def _bump_jaw_only(self, side: str, hand: Hand) -> bool:
+        """19-x14 (top · 실물 기준만): 지금 겹친 상자가 L 집게 날 (날+ · 날−) 뿐인가. overlap 과 같은 상자 · 식."""
+        if not (self.real and self.grasp_mode == "top" and side == "left"):
+            return False
+        tip, R = hand
+        z = self.rot[:, 2]
+        rel = (self.pos - tip)[None, :] + self._bump_t[:, None] * z[None, :]
+        s, j, n = -(rel @ R[:, 0]), rel @ R[:, 1], rel @ R[:, 2]
+        boxes = self._hand_boxes(side, JAW_HALF_CLOSED_CM if self.closed[side] else JAW_HALF_OPEN_CM)
+        hit = [float(self._box_dist(s, j, n, b).min()) <= self.radius for b in boxes]
+        return any(hit[:2]) and not any(hit[2:])
+
     def _update_bump(self, now: float, hands: Dict[str, Hand]) -> None:
         for side in self.sides:
             hit = (not self.holders) and self.overlap(side, hands[side], self.closed[side])
@@ -994,7 +1144,17 @@ class VirtualCan:
                 self._event(now, "bump", side=side)
                 if self.real and self.active and not self.ep["order"] and self.ep.get("real") is not None:   # 19-x: 잡기 전 부딪힘
                     self.ep["real"]["bump"] += 1
-                    self._real_flag("bump", f"{'왼팔' if side == 'left' else '오른팔'} 집게 · 몸체가 잡기 전에 캔에 닿음 (실물이면 캔이 밀림)")
+                    if self._bump_jaw_only(side, hands[side]):                   # 19-x14: top L 집게 날만 → 경고
+                        self._bump_jaw[side] = True
+                        self._real_flag("bump_jaw", "왼팔 집게 날이 잡기 전에 캔에 닿음 (실물 top 인계 성공 6 / 6 에도 있던 접촉 — 경고, 19-x13)", False)
+                    else:
+                        self._real_flag("bump", f"{'왼팔' if side == 'left' else '오른팔'} 집게 · 몸체가 잡기 전에 캔에 닿음 (실물이면 캔이 밀림)")
+            elif hit and self.bumping[side] and self._bump_jaw[side] and not self._bump_jaw_only(side, hands[side]):   # 19-x14: 같은 접촉이 날 밖 (링크 · 몸체) 으로 번짐 → 실패
+                self._bump_jaw[side] = False
+                if self.real and self.active and not self.ep["order"] and self.ep.get("real") is not None:
+                    self._real_flag("bump", "왼팔 집게 날에 이어 링크 · 몸체가 잡기 전에 캔에 닿음 (실물이면 캔이 밀림)")
+            if not hit:
+                self._bump_jaw[side] = False
             if self.bumping[side] and not hit:
                 self._bump_clear_t[side] = now
             self.bumping[side] = hit
@@ -1287,13 +1447,15 @@ class VirtualCan:
     def packet(self) -> bytes:
         self.seq = (self.seq + 1) & 0xFFFFFFFF
         tip = self.anchor_tip if self.anchor_tip is not None else (float("nan"),) * 3
+        shown = self.pos + np.array([0.0, 0.0, self.pen_depth]) if self.holders else self.pos   # 판 뚫기: 표시만 판 위로
+        if self.anchor_tip is not None and self.viz_frames is not None:
+            tip = self._viz_anchor_tip(shown, self.anchor_tip)      # 19-x11 (top · R 혼자 · robot_viz 있을 때만, 아니면 그대로)
         flags = ((FLAG_ACTIVE if self.active else 0) | (FLAG_BUMP if any(self.bumping.values()) else 0)
                  | (FLAG_READY_L if self.ready.get("left") else 0) | (FLAG_READY_R if self.ready.get("right") else 0))
         anchor = NO_ARM if not self.holders else (0 if self.holders[0] == "left" else 1)
         bumps = self.ep.get("bumps", 0) if self.active else 0
         if self.goal_name:
             flags |= (self.slots[self.goal_name] + 1) << GOAL_SHIFT
-        shown = self.pos + np.array([0.0, 0.0, self.pen_depth]) if self.holders else self.pos   # 판 뚫기: 표시만 판 위로
         place = (PLACE_OK if self.place_ok else 0) | (IN_GOAL if self.in_goal else 0)
         why = self.last_place["bits"] if self.last_place else 0
         gd = self._goal_dist()

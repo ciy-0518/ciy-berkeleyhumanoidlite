@@ -93,6 +93,7 @@ class Ctx:
         m = json.loads(Path(reach_map).read_text(encoding="utf-8"))
         self.mxs, self.mys = np.array(m["xs"], float), np.array(m["ys"], float)
         self.mcls = {s: np.array(m[s], int) for s in ("left", "right")}
+        self.map_min = {"left": 2, "right": 2}        # 19-x15 --reach-min (기본 2 = 됨 칸만, 예전 그대로)
 
     def top(self, x_cm: float) -> float:
         return self.table.top(x_cm / 100.0) * 100.0
@@ -123,6 +124,19 @@ def segments(act: np.ndarray):
     """(iLc, iRc, iLo, iRo) — 그리퍼 기록에서. L 닫기 → R 닫기 → L 열기 → R 열기 차례가 아니면 None."""
     g = act[:, 10:12] > 0.5
     if not g[:, 0].any() or not g[:, 1].any():
+        return None
+    if g[0, 0] or g[0, 1]:                              # 19-x7: 시작 관문 (--start-gate) 시연은 집게를 닫고 시작한다 (처음에 열린 시연은 아래 예전 식 그대로)
+        up = lambda c: np.where(c[1:] & ~c[:-1])[0] + 1    # 닫는 프레임들
+        dn = lambda c: np.where(~c[1:] & c[:-1])[0] + 1    # 여는 프레임들
+        for c in up(g[:, 0]):                          # R 닫기를 품은 첫 L 닫기 · 열기 (못 잡은 L 닫기는 건너뛴다)
+            dL = dn(g[:, 0]); dL = dL[dL > c]
+            if not len(dL):
+                return None
+            iLc, iLo = int(c), int(dL[0])
+            uR = up(g[:, 1]); uR = uR[(uR > iLc) & (uR < iLo)]  # L 이 든 동안 R 이 마지막으로 닫은 프레임 (못 잡은 닫기 뒤 다시 닫기)
+            dR = dn(g[:, 1]); dR = dR[dR > iLo]
+            if len(uR) and len(dR):
+                return iLc, int(uR[-1]), iLo, int(dR[0])
         return None
     iLc = int(np.argmax(g[:, 0]))
     iRc = int(np.argmax(g[:, 1]))
@@ -275,7 +289,7 @@ def try_one(ctx: Ctx, arr: dict, src: tuple, dst: tuple, name: str, tmp: Path, s
     moved = any(abs(v) > 1e-9 for v in r["ds"] + r["dg"])
     if moved and not (ctx.on_plate(*dst[0]) and ctx.on_plate(*dst[1])):
         return {**r, "ok": False, "why": "판 밖 (캔 반지름만큼 안쪽이 아님)"}
-    if moved and (ctx.map_cls("left", *dst[0]) != 2 or ctx.map_cls("right", *dst[1]) != 2):
+    if moved and (ctx.map_cls("left", *dst[0]) < ctx.map_min["left"] or ctx.map_cls("right", *dst[1]) < ctx.map_min["right"]):   # 기본 2 (= 예전 != 2)
         return {**r, "ok": False, "why": "범위 밖 (19-a 지도의 됨 칸이 아님)"}
     if moved:
         act, info = augment(ctx, arr, shift_for(ctx, src[0], dst[0]), shift_for(ctx, src[1], dst[1]))
@@ -360,6 +374,9 @@ def main() -> int:
     ap.add_argument("--tag", default=None, help="record 이름 aug_<tag> (기본: 출력 폴더 이름)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--reach-map", default=str(REACH_MAP))
+    ap.add_argument("--reach-min", default="2,2", metavar="L,R",
+                    help="19-x15 (기본 2,2 = 지금 그대로): 옮긴 자리가 받을 범위 지도 칸 값 하한 (L 시작 · R 도착). 2 = 됨, 1 = 되지만 여유 적음. "
+                         "옮긴 판은 그 뒤 IK · 보정 · 시뮬 · 판정을 그대로 거친다")
     ap.add_argument("--handover-margin-deg", type=float, default=None,
                     help="19-g (기본 끔): 옮긴 판의 인계 구간 [R 닫기, L 열기] 에서 실기 보정 사슬 (집게 끝 L 3 · R 3 → 처짐 보정 → 관절 한계) "
                          "잘림 0 · L shoulder_roll 한계 여유 ≥ 이 값 (°) 인 판만 남긴다 (tools/handover_swap.py handover_check)")
@@ -368,9 +385,12 @@ def main() -> int:
                          "R elbow_pitch 여유 ≥ 0.5° · 나머지 관절 ≥ 8°, 두 그리퍼 간격 ≥ 5 cm) 을 지키는 판만 남긴다")
     ap.add_argument("--grasp-mode", choices=("bottom", "top"), default="bottom",
                     help="19-x (기본 bottom): 시뮬 가상 캔 잡기 모드. top = L 위쪽 (10 ~ 14 cm) 먼저, R 아래쪽 (3 ~ 5 cm). 범위 지도는 --reach-map 으로 (config/reach_top_19x.json)")
+    ap.add_argument("--roll-stop", action="store_true", help="19-x20 (기본 끔): 원본 재생 · 증강 시뮬 모터 명령의 어깨 roll 을 실물 멈춤 (워치독 ROLL_STOP_DEG) 으로 묶는다")
     ap.add_argument("--grasp-real", action="store_true",
                     help="19-x (기본 끔): 시뮬 가상 캔 실물 기준 판정 (인계 깊이 · 비킴 · 누름 · 부딪힘, virtual_can REAL_*) 을 어긴 판을 버린다")
     a = ap.parse_args()
+    if a.roll_stop:                                    # 19-x20 (켤 때만)
+        PS.ROLL_STOP = PS.roll_stop_watchdog()
     if a.grasp_mode != "bottom" or a.grasp_real:       # 19-x (켤 때만): Ctx · 시뮬의 가상 캔에 넘긴다
         PS.VCAN_EXTRA.update({**({"grasp_mode": a.grasp_mode} if a.grasp_mode != "bottom" else {}), **({"real": True} if a.grasp_real else {})})
     global HO_MARGIN_DEG, HO_CHECK_J
@@ -387,6 +407,7 @@ def main() -> int:
     else:
         eps = L.episode_files("base", records=a.records)
     ctx = Ctx(Path(a.reach_map))
+    ctx.map_min = dict(zip(("left", "right"), (int(v) for v in a.reach_min.split(","))))
     rng = np.random.default_rng(a.seed)
     tries, accepted, t0 = [], {}, time.time()
     idx = 0

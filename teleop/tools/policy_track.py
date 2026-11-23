@@ -67,7 +67,7 @@ class PolicyTrack:
     def __init__(self, spec: str, ref, sides, table, *, can_start: str = "L1", can_goal: str = "R1", ensemble: bool = False,
                  max_s: float = MAX_S, limits=None, open_deg=(0, 0), close_deg=(57, 57), dry_run: bool = True, viz_target: Optional[str] = None,
                  server_args: str = "", log=print, obs_source: str = "encoder",
-                 can_basis: str = "logical"):
+                 can_basis: str = "logical", assist: Optional[str] = None, grasp_assist: Optional[str] = None):
         import virtual_can as VCAN
         import vr_control_watchdog_biarm as W
         self.spec, self.sides, self.log = spec, tuple(sides), log
@@ -108,6 +108,23 @@ class PolicyTrack:
         self.can_start, self.can_goal = self.vcan.start_name, self.vcan.goal_name
         self.motor = None                    # bind() — 관측용 (명령·엔코더)
         self.table = table
+        self._ha = None                      # 19-x21 (기본 None = 끔): top 인계 보정 + L 여는 안전 (tools/handover_assist.py)
+        if assist:
+            import handover_assist as HA
+            self._HA = HA
+            gvc = VCAN.VirtualCan(table, "L1", ref, self.sides, W.motor_to_urdf_fn(ref, self.sides), log=lambda s: None, grasp_mode="top", real=True)
+            lim_R = (limits or {}).get("right") or {j: (-math.pi, math.pi) for j in DE.JOINTS}
+            self._ha = HA.HandoverAssist(HA.load_target(assist), gvc, lim_R, (-math.inf, math.radians(W.ROLL_STOP_DEG["right"])),
+                                         extra_cm=VCAN.HANDOVER_HEIGHT_EXTRA_CM, log=lambda s: log("\n" + s))
+            self._ha_vc = gvc
+        self._ga = None                      # 19-x22 (기본 None = 끔): top L 잡기 보정
+        if grasp_assist:
+            import handover_assist as HA
+            self._HA = HA
+            gvc2 = VCAN.VirtualCan(table, "L1", ref, self.sides, W.motor_to_urdf_fn(ref, self.sides), log=lambda s: None, grasp_mode="top", real=True)
+            lim_L = (limits or {}).get("left") or {j: (-math.pi, math.pi) for j in DE.JOINTS}
+            self._ga = HA.GraspAssist(HA.load_grasp_target(grasp_assist), gvc2, lim_L, (math.radians(W.ROLL_STOP_DEG["left"]), math.inf),
+                                      log=lambda s: log("\n" + s))
         self.cond_vec = None                 # 17-a: 서버가 조건 입력 정책이라고 알리면 (hello cond) state 뒤에 붙일 4 값
         self._start_server(server_args)
         self.meta = {"record": f"정책 {self.kind}", "episode": 1, "result": "정책", "start_slot": self.can_start, "goal_slot": self.can_goal,
@@ -217,6 +234,19 @@ class PolicyTrack:
         self.last = {"obs_t": "", "act_t": "", "lat_ms": "", "chunk": "", "idx": "", "late": "0"}
         self.result = None
         self._fresh = False
+        if getattr(self, "_ga", None) is not None:          # 19-x22
+            self._ga.reset()
+            self._ga_rows = -1
+            self._ga_L = None
+            self._ga_open_seen = False
+            self._ga_prevL = None
+            self._pol_want = {"L": 0, "R": 0}
+        if getattr(self, "_ha", None) is not None:          # 19-x21
+            self._ha.reset()
+            self._ha_rel = {"logic": None, "enc": None}      # 캔 ← L 손 틀 (가정 B), 논리 · 엔코더
+            self._ha_rows = -1
+            self._ha_R = None
+            self._pol_want = {"L": 0, "R": 0}
 
     def bind(self, motor) -> None:
         """관측에 쓸 모터 (replay_run 의 view: 처짐 보정이면 논리 명령)."""
@@ -368,6 +398,9 @@ class PolicyTrack:
         self.action = a
         self.last.update(chunk=str(chunk_no), idx=str(idx))
         want = {"L": int(a[10] > 0.5), "R": int(a[11] > 0.5)}
+        if self._ha is not None or self._ga is not None:     # 19-x21 · 19-x22: 그리퍼는 규칙이 정한다 (advance)
+            self._pol_want = want
+            return
         if want != self.desired:
             self.desired = want
             self.pending_t = None
@@ -392,7 +425,107 @@ class PolicyTrack:
                 self.stop_reason = f"정책 서버 응답 없음 ({DEAD_S:.1f} 초)"
             if self.tau >= self.max_s and not self.stop_reason:
                 self.stop_reason = f"정책 최대 시간 {self.max_s:.0f} 초"
-        return self.pose_at(self.tau)
+        pose = self.pose_at(self.tau)
+        if self._ga is not None and self.phase == "play" and self.action is not None and self.motor is not None:
+            pose = self._grasp_assist(pose)
+        if self._ha is not None and self.phase == "play" and self.action is not None and self.motor is not None:
+            pose = self._assist(pose)
+        elif self._ga is not None and self.phase == "play" and self.action is not None and self.motor is not None:
+            w = dict(self._ga_want) if getattr(self, "_ga_want", None) is not None else dict(self._pol_want)
+            if w != self.desired:
+                self.desired = w
+                self.pending_t = None
+        return pose
+
+    def _ga_held(self, st) -> bool:
+        """L 잡기 보정이 보는 'L 이 쥠'. 기본: 시작 자세 뒤 L 이 열렸다가 다 닫힘. ga_held_on_grasp (19-x30, replay_run --grasp-assist-held-on-grasp, 기본 끔) 면
+        그 닫힘이 캔을 잡는 닫힘 (보정이 닫기를 허락함, 또는 가상 캔 held_*) 일 때만 — 공중 닫힘에서 보정이 꺼지지 않는다 (19-x28 실기 판 5)."""
+        held = bool(self._ga_open_seen and st["L"] == 1)
+        if held and getattr(self, "ga_held_on_grasp", False):
+            held = self._ga.info.get("close_t") is not None or str(self.VCAN.STATE_NAMES[self.vcan.state]).startswith("held")
+        return held
+
+    def _grasp_assist(self, pose):
+        """19-x22: 정책 걸음마다 한 번. 캔 = --can-start 입력 자리 (판 위), L 쥠 = 닫혀 있던 L 이 열린 뒤 다시 다 닫힘 (그리퍼 상태, 시작 자세의 닫힘은 뺌)."""
+        if self.rows != self._ga_rows:
+            self._ga_rows = self.rows
+            ct = self.motor.command_target
+            st = self.state()
+            if self._ga_prevL == 1 and st["L"] == 0:         # 닫혀 있던 L 이 열림 (시작 자세의 닫힘 뒤) — 그 뒤 다시 다 닫히면 쥔 것
+                self._ga_open_seen = True
+            self._ga_prevL = st["L"]
+            can0 = np.asarray(self.vcan._slot_base(self.vcan.start_name), float)
+            qL, wL = self._ga.step(self.tau, dict(pose["left"]), {j: float(ct["left"][j]) for j in DE.JOINTS}, int(self._pol_want["L"]),
+                                   self._ga_held(st), can0, STEP_S,
+                                   **({"tip_err": self.tip_err_L} if getattr(self, "tip_err_L", None) is not None else {}))
+            if self._ga.st == "out" and not self.stop_reason:          # 19-x26 C (rule 켤 때만 생김): L 도달 밖 — 닫지 않고 끝
+                self.stop_reason = f"L 도달 밖 ({self._ga.info.get('out_why', '')})"
+            self._ga_L = qL
+            self._ga_want = {"L": int(wL), "R": int(self._pol_want["R"])}
+            if self._ha is not None:                 # R 보정은 L 잡기 보정이 정한 L 그리퍼를 정책 L 로 본다
+                self._pol_want = dict(self._pol_want, L=int(wL)) if self._ga.st not in ("off", "done") else self._pol_want
+        if self._ga_L is not None and self._ga.st not in ("off", "done"):
+            pose = dict(pose)
+            pose["left"] = dict(self._ga_L)
+        return pose
+
+    # ------------------------------------------------------------------ 19-x21 인계 보정
+    def _enc(self):
+        raw = getattr(self.motor, "_inner", self.motor)
+        meas = getattr(raw, "last_measured", None) or {}
+        if self.dry_run or not all(s in meas and all(math.isfinite(float(meas[s].get(j, float("nan")))) for j in DE.JOINTS) for s in self.sides):
+            return None
+        return {s: {j: float(meas[s][j]) for j in DE.JOINTS} for s in self.sides}
+
+    def _attach(self, qL):
+        vc = self._ha_vc
+        hL = vc.hand_of("left", qL)
+        can0 = self.vcan._slot_base(self.vcan.start_name)
+        keep = (vc.pos, vc.rot, list(vc.holders), vc.align)
+        try:
+            vc.pos, vc.rot, vc.holders, vc.align = np.asarray(can0, float).copy(), np.eye(3), [], None
+            c = vc.grip_check(hL, 0.0, False, side="left")
+        finally:
+            vc.pos, vc.rot, vc.holders, vc.align = keep
+        canB = np.asarray(can0, float) - float(c["j"]) * hL[1][:, 1]
+        return (hL[1].T, hL[1].T @ (canB - hL[0]))
+
+    def _can(self, rel, qL):
+        tL, RL = self._ha_vc.hand_of("left", qL)
+        return tL + RL @ rel[1], RL @ rel[0]
+
+    def _assist(self, pose):
+        """정책 걸음마다 한 번 (20 Hz). 논리 명령 (bind 한 view 의 command_target) 으로 판정 · 목표, L 여는 안전은 엔코더 (없으면 논리)."""
+        if self.rows != self._ha_rows:
+            self._ha_rows = self.rows
+            ct = self.motor.command_target
+            qL, qRc = {j: float(ct["left"][j]) for j in DE.JOINTS}, {j: float(ct["right"][j]) for j in DE.JOINTS}
+            st = self.state()
+            enc = self._enc()
+            if st["L"] == 1 and self._ha_rel["logic"] is None:
+                self._ha_rel["logic"] = self._attach(qL)
+                self._ha_rel["enc"] = self._attach(enc["left"]) if enc is not None else None
+            elif st["L"] == 0 and self.applied.get("L", 0) == 0 and self._ha.st in ("off", "done"):
+                self._ha_rel = {"logic": None, "enc": None}
+            held = self._ha_rel["logic"] is not None
+            cp, cr = self._can(self._ha_rel["logic"], qL) if held else (None, None)
+
+            def enc_check():
+                if enc is None or self._ha_rel["enc"] is None:
+                    return None
+                p_, r_ = self._can(self._ha_rel["enc"], enc["left"])
+                return self._HA.check_r(self._ha_vc, self._ha_vc.hand_of("right", enc["right"]), p_, r_, self.VCAN.HANDOVER_HEIGHT_EXTRA_CM)
+            qR, w = self._ha.step(self.tau, qL, dict(pose["right"]), qRc, dict(self._pol_want), held, st["R"] == 1, cp, cr, STEP_S, enc_check=enc_check)
+            if self._ha.st == "abort_done" and not self.stop_reason:   # 19-x26 B (rule 켤 때만 생김): R 열고 물러난 뒤 끝 (L 쥔 채)
+                self.stop_reason = "인계 기준 못 채움 — R 을 열고 물러남 (L 쥔 채)"
+            self._ha_R = qR
+            if w != self.desired:
+                self.desired = w
+                self.pending_t = None
+        if self._ha_R is not None and self._ha.st not in ("off", "done"):
+            pose = dict(pose)
+            pose["right"] = dict(self._ha_R)
+        return pose
 
     # ------------------------------------------------------------------ 그리퍼
     def grip_at(self, tau: float) -> Dict[str, int]:
@@ -471,7 +604,9 @@ class PolicyTrack:
         lat = np.asarray(self.lat_ms) if self.lat_ms else np.zeros(1)
         return {"steps": self.step_n + 1, "late": self.late, "lat_ms_median": round(float(np.median(lat)), 2),
                 "lat_ms_max": round(float(lat.max()), 2), "stop_reason": self.stop_reason,
-                "can_result": (self.result or {}).get("result"), "can_events": [(round(t, 2), k) for t, k, _ in self.vcan.events][-12:]}
+                "can_result": (self.result or {}).get("result"), "can_events": [(round(t, 2), k) for t, k, _ in self.vcan.events][-12:],
+                **({"assist": dict(self._ha.info, state=self._ha.st)} if self._ha is not None else {}),
+                **({"grasp_assist": dict(self._ga.info, state=self._ga.st)} if self._ga is not None else {})}
 
 
 def VCANNAME(track) -> str:

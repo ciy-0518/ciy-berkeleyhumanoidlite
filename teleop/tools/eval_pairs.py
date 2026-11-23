@@ -89,10 +89,28 @@ def main() -> int:
     ap.add_argument("--grasp-mode", choices=("bottom", "top"), default="bottom", help="19-x (기본 bottom): 시뮬 가상 캔 잡기 모드 (top = L 위쪽 먼저, R 아래쪽)")
     ap.add_argument("--grasp-real", action="store_true",
                     help="19-x (기본 끔): 시뮬 가상 캔 실물 기준 판정 (인계 깊이 · 비킴 · 누름 · 부딪힘). 켜면 성공 (ok5 · ok15) 은 real_fail 0 일 때만")
+    ap.add_argument("--handover-assist", default=None, metavar="JSON",
+                    help="19-x21 (기본 끔): 정책 방법 (act · mlp) 에만 top 인계 보정 + L 여는 안전 규칙 (tools/handover_assist.py, 목표 json 예: config/handover_assist_top_19x21.json)")
+    ap.add_argument("--grasp-assist", default=None, metavar="JSON",
+                    help="19-x22 (기본 끔): 정책 방법에만 top L 잡기 보정 (tools/handover_assist.GraspAssist, 목표 json 예: config/grasp_assist_top_19x22.json). --handover-assist 와 같이 켤 수 있다")
+    ap.add_argument("--roll-stop", action="store_true", help="19-x20 (기본 끔): 시뮬 모터 명령의 어깨 roll 을 실물 멈춤 (워치독 ROLL_STOP_DEG) 으로 묶는다")
+    ap.add_argument("--first-from", default=None,
+                    help="19-x17 (기본 끔 = 정책 기록 이름으로 학습 데이터 폴더에서 찾음): 정책 시작 자세 = 이 목록 (npz 한 줄에 하나) 의 첫 행동 평균. "
+                         "다듬은 기록 (trimB_*) 처럼 학습 데이터 폴더에 없는 기록으로 학습한 정책용")
     a = ap.parse_args()
+    if a.roll_stop:                                    # 19-x20 (켤 때만)
+        PS.ROLL_STOP = PS.roll_stop_watchdog()
     if a.grasp_mode != "bottom" or a.grasp_real:       # 19-x (켤 때만)
         PS.VCAN_EXTRA.update({**({"grasp_mode": a.grasp_mode} if a.grasp_mode != "bottom" else {}), **({"real": True} if a.grasp_real else {})})
-    args_out = {k: v for k, v in vars(a).items() if not ((k == "grasp_mode" and v == "bottom") or (k == "grasp_real" and not v))}   # 끄면 기록이 지금과 같게
+    args_out = {k: v for k, v in vars(a).items() if not ((k == "grasp_mode" and v == "bottom") or (k == "grasp_real" and not v) or (k == "first_from" and v is None) or (k == "roll_stop" and not v) or (k == "handover_assist" and v is None) or (k == "grasp_assist" and v is None))}   # 끄면 기록이 지금과 같게
+    ha_target = None
+    if a.handover_assist:                              # 19-x21 (켤 때만)
+        import handover_assist as HA
+        ha_target = HA.load_target(a.handover_assist)
+    ga_target = None
+    if a.grasp_assist:                                 # 19-x22 (켤 때만)
+        import handover_assist as HA
+        ga_target = HA.load_grasp_target(a.grasp_assist)
     pairs = VC.load_pairs(a.pairs)[:a.limit_pairs]
     out = Path(a.out).expanduser()
     out.mkdir(parents=True, exist_ok=True)
@@ -107,6 +125,9 @@ def main() -> int:
         pol = None
         if kind not in ("nearest", "shift"):
             pol = PS.load_policy(kind)
+            if a.first_from:                           # 19-x17 (켤 때만)
+                fl = [ln.strip() for ln in Path(a.first_from).expanduser().read_text(encoding="utf-8").splitlines() if ln.strip()]
+                pol.first = np.mean([np.asarray(L.arrays(f)["action"], float)[0, :10] for f in fl], 0).reshape(2, 5)
         elif not demos:
             raise SystemExit(f"{label}: --demos 가 필요하다")
         elif kind == "shift" and ctx is None:
@@ -136,13 +157,19 @@ def main() -> int:
                                            can_jitter_cm=a.can_jitter_cm, pose_jitter_deg=a.pose_jitter_deg, first=act[0, :10].reshape(2, 5), align_axis_cm=2.0)
                         else:
                             r = PS.rollout(pol, nm, max_s=a.max_s, out_dir=md, start=st, goal=go, strict=True, seed=seed, meas_sim=a.meas_sim,
-                                           can_jitter_cm=a.can_jitter_cm, pose_jitter_deg=a.pose_jitter_deg, align_axis_cm=2.0)
+                                           can_jitter_cm=a.can_jitter_cm, pose_jitter_deg=a.pose_jitter_deg, align_axis_cm=2.0,
+                                           **({"assist": ha_target} if ha_target is not None else {}),
+                                           **({"grasp_assist": ga_target} if ga_target is not None else {}))
                 gd = fnum(r.get("goal_dist_cm"))
                 stage = stage_of(r)
                 row = {"method": label, "kind": kind if pol is None else kind.split(":")[0], "pair": pi + 1, "start": list(st), "goal": list(go), "seed": seed,
                        "result": r.get("result"), "stage": stage, "goal_dist_cm": gd, "ok5": stage == "성공", "ok15": stage == "성공" and gd is not None and gd <= NARROW_CM,
                        "strict_flags": (r.get("strict") or {}).get("strict_flags"), "strict_fail": (r.get("strict") or {}).get("strict_fail"),
                        "final_minus_goal_cm": r.get("final_minus_goal_cm"), "sim_s": r.get("sim_s"), "why": r.get("why"), **extra}
+                if r.get("assist") is not None:         # 19-x21 (켤 때만): 규칙이 한 일
+                    row["assist"] = r["assist"]
+                if r.get("grasp_assist") is not None:   # 19-x22 (켤 때만)
+                    row["grasp_assist"] = r["grasp_assist"]
                 if a.grasp_real:                       # 19-x (켤 때만): 실물 기준 실패면 성공이 아니다
                     rl = r.get("real") or {}
                     row.update({"real_fail": rl.get("real_fail"), "real_flags": rl.get("real_flags"), "real_depth_cm": rl.get("real_depth_cm")})

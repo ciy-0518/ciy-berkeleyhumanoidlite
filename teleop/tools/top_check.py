@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 """위쪽 잡기 시연 점검 (작업 지시 19-x). dry-run 기록의 에피소드 파일 (<로그>_episodes.csv) 을 읽어 에피소드마다 한 줄:
   결과 · 잡은 차례 · 인계 · 인계 깊이 (논리, 엔코더 상당 = 논리 + 1.30) · L / R 비킴 · 누름 · 잡기 전 부딪힘 · 시작 자세 · 엄격 판정 → 통과 여부.
-통과 = 결과 auto_success · 잡은 차례 L>R · 인계 1 · real_fail 0 · strict_fail 0 (엄격 판정을 켠 기록이면) · 시작 자세 기록이 있음 (--start-gate 를 켠 기록이면).
+통과 = 결과 auto_success · 잡은 차례 L>R · 인계 1 · 실물 기준 실패 없음 · 엄격 실패 없음 (엄격 판정을 켠 기록이면) · 시작 자세 기록이 있음 (--start-gate 를 켠 기록이면).
+  19-x7: 실물 · 엄격 실패는 기록된 까닭 (real_flags · strict_flags) 으로 다시 셈한다 — 누름 (press) 은 경고 (학습 데이터에서 press_edit.py 로 판 면에 멈춤),
+         엄격 R 깊이 · 비킴 (depth_R · side_R, 수직 정의) 은 경고 (받는 손은 실물 기준 가정 B 깊이 · 비킴이 판정). 엄격 gap · goal 은 원래 경고.
   top_check.py <로그 이름 또는 경로> [...] [--list-out 통과목록.txt]
   예: top_check.py dry_vcan_2130 dry_vcan_2215 --list-out ~/cc_analysis/top19x/pass.txt
 통과 목록은 demo_export 가 만드는 에피소드 이름 (<로그 이름>_epNN) 한 줄씩 — 증강 · 학습 단계가 이 목록만 쓴다."""
@@ -14,6 +16,8 @@ import sys
 from pathlib import Path
 
 LOGS = Path(__file__).resolve().parent.parent / "logs"
+REAL_WARN = {"press", "bump_jaw"}                        # 19-x7 누름 · 19-x14 잡기 전 L 집게 날만 닿음 (실물 성공 6 / 6 에도 있던 접촉, 19-x13)
+STRICT_FAIL = {"open_L", "open_R", "depth_L", "side_L"}   # 19-x7: top 엄격 실패 까닭 (gap · goal 은 경고, depth_R · side_R 은 실물 기준과 겹쳐 경고)
 DELTA_CM = 1.30          # 엔코더 상당 = 논리 + Δ (19-j delta.py, virtual_can REAL_DEPTH_LOGIC_CM 근거)
 
 
@@ -47,10 +51,12 @@ def check(path: Path):
         if r.get("handover") != "1":
             why.append("인계 없음")
         has_real = "real_fail" in r
-        if has_real and r.get("real_fail") == "1":
-            why.append("실물 기준 " + (r.get("real_flags") or "?"))
-        if "strict_fail" in r and r.get("strict_fail") == "1":
-            why.append("엄격 " + (r.get("strict_flags") or "?"))
+        rf = set((r.get("real_flags") or "").split()) - REAL_WARN
+        if has_real and r.get("real_fail") == "1" and rf:
+            why.append("실물 기준 " + " ".join(sorted(rf)))
+        sf = set((r.get("strict_flags") or "").split()) & STRICT_FAIL
+        if "strict_fail" in r and r.get("strict_fail") == "1" and sf:
+            why.append("엄격 " + " ".join(sorted(sf)))
         if not has_real:
             why.append("실물 기준 판정 없이 모은 기록 (--grasp-real)")
         gate = fnum(r.get("start_gate_wait_s")) if "start_gate_wait_s" in r else None

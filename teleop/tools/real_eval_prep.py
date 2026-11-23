@@ -34,6 +34,7 @@ import eval_pairs as EP  # noqa: E402
 TELEOP = TOOLS.parent
 HOME = Path.home()
 # 통일안 (18-b · 18-e · 18-e 추가, 작업 지시 19-d §0). 두 방법 모두에 같은 몫 + 방법마다 그 방법에만 뜻이 있는 몫.
+RUN_STEP = "**순서: 명령 실행 → 첫 자세 도착 → 15 초 안에 캔을 십자선에 놓기.** 캔을 먼저 놓고 시작하지 않습니다 (첫 자세로 올라가는 팔이 캔을 칠 수 있음, 19-x17 판 2 · 3)"   # 19-x18 실행표 (판마다)
 UNIFIED = "--sag-comp --no-grip-warm --grip-open-first --tip-cap-deg 18 --tip-offset-cm L 3 0 0 R 3 0 0 --place-tip-offset-cm R -2 0 0 --carry-lift-cm R 2"
 POLICY_ONLY = "--policy-end-after-release 2 --policy-max-s 40 --policy-obs sag-model --policy-can-basis encoder-nocorr"
 REPLAY_ONLY = "--speed 1"            # 재생 기본은 0.5 배 — 정책 · 시뮬레이션 평가 · 시연은 1 배
@@ -188,7 +189,7 @@ def main() -> int:
     lines = [f"# 실기 평가 실행표 ({a.tag})", "", "판 표시: 로봇 쪽 모서리에서 앞으로 · 판 왼쪽 끝 (로봇 왼쪽) 에서 오른쪽으로 (cm).", ""]
     for b in boards:
         lines += [f"## 판 {b['board']} — 쌍 {b['pair']} {b['method']}: 캔 {b['sname']} (모서리 {b['start_disp'][0]:g} · 왼쪽 끝 {b['start_disp'][1]:g}) → "
-                  f"{b['gname']} (모서리 {b['goal_disp'][0]:g} · 왼쪽 끝 {b['goal_disp'][1]:g})", "```", b["cmd"] or "(shift 파일 없음 — 건너뜀)", "```", ""]
+                  f"{b['gname']} (모서리 {b['goal_disp'][0]:g} · 왼쪽 끝 {b['goal_disp'][1]:g})", "- " + RUN_STEP, "```", b["cmd"] or "(shift 파일 없음 — 건너뜀)", "```", ""]
     lines += ["## 시간이 남으면 — 고정 네 조합 (act_multi_xy)", ""]
     for f_ in fixed:
         lines += [f"{f_['start']} → {f_['goal']}", "```", f_["cmd"], "```", ""]

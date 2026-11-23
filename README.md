@@ -23,6 +23,7 @@ This repository is a fork of the Berkeley Humanoid Lite low-level control code, 
 - During demonstration collection the robot does not need to move (`--dry-run`): the operator sees the robot's digital twin and a virtual can in VR, and the robot PC simulates the can and judges success.
 - Recorded demonstrations are augmented by shifting the can's start/goal positions (object-centric shift) and re-solving the arm IK, then used to train ACT (LeRobot).
 - The trained policy runs on the real robot through `replay_run.py --policy`, with the same safety chain and calibration (sag, gripper-tip offset, place offset, carry lift, gripper sync).
+- Two grasp modes are supported, each with its own policy: **bottom grasp** (left hand holds the lower part of the can, right hand takes the upper part) and **top grasp** (left hand holds the upper part, right hand takes the lower part). See [Top-grasp mode](#top-grasp-mode-learned-policy--geometric-corrections).
 
 ## Repository layout
 
@@ -38,12 +39,14 @@ teleop/
     teleop:        pos_retarget.py  table_limit.py  auto_target.py  gripper_link.py  robot_viz.py  arm_pose_logger.py
     voice cues:    cue_player.py (server PC)  session_cue.py  *_session.py  split_by_cue.py  voice_durations.json
     virtual can:   virtual_can.py  handover_depth.py  top_check.py
-    recording:     demo_export.py  demo_replay.py  learn_data.py  to_lerobot.py
+    recording:     demo_export.py  demo_replay.py  learn_data.py  to_lerobot.py  press_edit.py  top_trim.py
     augmentation:  aug_demo.py  handover_swap.py  policy_sim.py  learn_mlp.py
     calibration:   sag_comp.py  tip_offset.py  calib_tip.py
-    real robot:    replay_run.py  policy_track.py  can_go.py  real_eval_prep.py  real_eval_fill.py
+    corrections:   handover_assist.py (top grasp: left-grasp assist, right-handover assist, left-open safety)
+    real robot:    replay_run.py  policy_track.py  policy_server.py  can_go.py  real_eval_prep.py  real_eval_fill.py
+    run sheets:    top_shift_prep.py  top_policy_prep.py
     evaluation:    eval_pairs.py  eval_plot.py  top19x_plan.py
-    pipelines:     anypos_c2.sh  handover_g.sh  handover_j.sh  top19x.sh  learn_run.sh
+    pipelines:     anypos_c2.sh  handover_g.sh  handover_j.sh  top19x.sh  top19x_trim.sh  learn_run.sh
 docs/UPSTREAM_README.md        original Berkeley Humanoid Lite low-level README (installation, CAN, motors)
 ```
 
@@ -105,6 +108,90 @@ python3 ~/teleop-docs/_teleop/tools/real_eval_prep.py --help    # evaluation she
 Live teleoperation of the real robot: `~/run.sh teleop`.
 New features are behind command-line flags that are off by default.
 
+### Can coordinates (`can_go.py`)
+
+`can_go.py` takes the can start and goal positions, checks them (table limits, reach maps, distance to the training demonstrations), shows the command, waits for Enter and then runs the policy. The coordinates are in the robot base frame, in cm (x forward, y to the robot's left). They come from one of two sources:
+
+- **Measured on the table.** Give `--start x,y --goal x,y`, or use `--plate` to give distances measured from the table edges.
+- **Sent over UDP by an external module.** Use `--start-from udp:<port>`. Each datagram is one JSON line, `{"start": [x, y], "conf": 0..1, "t": <unix time>}`, in robot-base cm, and only the latest value before the run is used.
+
+The depth-camera module that produced UDP coordinates in our setup is **not** part of this repository.
+
+```bash
+python3 teleop/tools/can_go.py --start 27,13 --goal 33,-12 --print-only   # show the command and checks only
+python3 teleop/tools/can_go.py --start 27,13 --goal 33,-12                # check → Enter → run
+python3 teleop/tools/can_go.py --start-from udp:5030 --goal 33,-12        # can position from an external module
+python3 teleop/tools/can_go.py --start 31,14 --goal 28,-24 --mode-auto    # choose the grasp mode by reach
+```
+
+`can_go.py --mode-auto` chooses the grasp mode from the reach maps, and it is off by default. When the bottom-grasp checks fail only on left-hand reach, it consults the top-grasp reach map (`config/reach_top_19x.json`) and switches to the top-grasp policy (`--policy-top`). The command it builds for top grasp does not include the correction chain described below. To reproduce the paper's top-grasp runs, use the `top_policy_prep.py` run sheet.
+
+## Top-grasp mode (learned policy + geometric corrections)
+
+Top grasp is meant to extend the workspace to can positions that the bottom-grasp policy cannot reach. In the paper’s real-robot runs, the reachable front edge was narrower than computed. It uses its own ACT policy, trained from VR demonstrations collected with `--grasp-mode top --grasp-real`. In those demonstrations, success is judged against the real gripper geometry, and the shoulder roll is limited to the angle where the upper arm physically meets the torso frame.
+
+On its own, the top-grasp policy does not align the grippers precisely enough for the handover. The policy produces the overall motion: reach, grasp, handover, carry and place. Geometric corrections take over the final alignment:
+
+| Correction | Flag (`replay_run.py --policy`) | What it does |
+|---|---|---|
+| Left-grasp assist | `--grasp-assist <json>` | Moves the left gripper to a can-relative target pose learned from passing demonstrations. It closes only within the target height and depth, and stops the run if the target is out of reach. |
+| Right-handover assist and left-open safety | `--handover-assist <json>` | Moves the right gripper to the can-relative handover pose. The left hand may open only after the right hand has closed within the depth and offset criteria. After the retries run out, the right hand opens and backs off while the left hand keeps the can. |
+| Staged gripper-tip offsets | `--tip-offset-cm`, `--grasp-tip-offset-cm` + `--grasp-tip-skip-start-grip` + `--grasp-tip-release-on-grasp`, `--place-tip-offset-cm` | Applies a different tip offset in each phase. An extra left offset is used until the grasp that actually takes the can. |
+| Shoulder-roll hold | `--tip-roll-stop` | Produces the tip offset with the other joints while keeping the shoulder roll within its physical stop. |
+| Place-time elbow sag | `--place-sag-elbow-scale` | Scales the right-elbow sag compensation while only the right hand holds the can. |
+| Tip-offset joint cap | `--tip-cap-deg` | Caps the joint change that the tip offset may add. |
+| End rules | `--policy-end-skip-start-grip`, `--policy-end-after-held`, `--grasp-assist-held-on-grasp` | Counts only grasps and releases that involve the can, so that a close in the air does not end the run or switch off the assist. |
+
+All of these flags are off by default.
+
+**Paper runs.** The top-grasp real-robot runs in the paper (19-x29) were made from a run sheet generated by `top_policy_prep.py`, with the following setup:
+
+- policy: `anypos_top19x22_x5`
+- correction configs: `config/grasp_assist_top_19x28.json` and `config/handover_assist_top_19x26.json`
+
+```bash
+# 1. Demonstration collection in VR, top grasp (robot stays still)
+~/run.sh dry --pairs ~/teleop-docs/_teleop/config/pairs_top_19x.txt --grasp-mode top --grasp-real --start-gate
+
+# 2. Check → export → press edit → augmentation → dataset → ACT training → simulated evaluation
+bash ~/teleop-docs/_teleop/tools/top19x.sh dry_vcan_<HHMM> [dry_vcan_<HHMM> ...]
+
+# 3. Trim the handover segment → augmentation → dataset → training → evaluation (the paper's policy anypos_top19x22_x5)
+NAME=top19x22 SRC=<list of exported demo .npz> ROLL_STOP=1 TRIM_TAG=trimB22 MODE=B \
+    bash ~/teleop-docs/_teleop/tools/top19x_trim.sh
+#    trimmed-record list: ~/cc_analysis/top19x22/run/trim/files_trim.txt (policy start poses, used below)
+
+# 4. Real-robot run sheet (one command per board, checks, results CSV)
+CK=~/cc_analysis/learn/runs/anypos_top19x22_x5/checkpoints/last/pretrained_model
+python3 ~/teleop-docs/_teleop/tools/top_policy_prep.py --boards <boards.json> --policy $CK \
+    --first-from ~/cc_analysis/top19x22/run/trim/files_trim.txt \
+    --offset-cm 1.5 --grasp-extra-left-cm 1.5 --grasp-release-on-grasp --grasp-held-on-grasp --tip-cap-deg 30 --end-after-held \
+    --grasp-assist ~/teleop-docs/_teleop/config/grasp_assist_top_19x28.json \
+    --handover-assist ~/teleop-docs/_teleop/config/handover_assist_top_19x26.json \
+    --can-first --suffix 29 --tag real19x29 --out ~/cc_analysis/real19x29
+#    <boards.json>: list of {"label", "start": [x, y], "goal": [x, y], "trained"} in robot-base cm
+#    → runbook29.md, plan29.json, results29.csv
+```
+
+The command that the run sheet produces for one board looks like this:
+
+```bash
+~/run.sh policy ~/cc_analysis/learn/runs/anypos_top19x22_x5/checkpoints/last/pretrained_model \
+  --can-start 31,14 --can-goal 28,-24 --sag-comp --no-grip-warm --grip-open-first --tip-cap-deg 30 \
+  --tip-offset-cm L 1.5 0 0 R 1.5 0 0 --place-tip-offset-cm R -2 0 0 --carry-lift-cm R 2 --tip-roll-stop \
+  --open-settle-cm 0.5 --open-settle-max-s 1.0 \
+  --grasp-tip-offset-cm L 1.5 0 0 --grasp-tip-skip-start-grip --grasp-tip-release-on-grasp \
+  --place-sag-elbow-scale 0 --grasp-assist-held-on-grasp \
+  --policy-end-after-release 2 --policy-max-s 40 --policy-obs sag-model --policy-can-basis encoder-nocorr \
+  --policy-end-skip-start-grip --policy-end-after-held \
+  --grasp-assist ~/teleop-docs/_teleop/config/grasp_assist_top_19x28.json \
+  --handover-assist ~/teleop-docs/_teleop/config/handover_assist_top_19x26.json \
+  --policy-server-args "--first-from ~/cc_analysis/top19x22/run/trim/files_trim.txt" \
+  --log-csv ~/teleop-docs/_teleop/logs/real19x29_b01_policy.csv
+```
+
+The correction configs are generated by `handover_assist.py --files <passing demos> --out <json>`, with `--grasp` for the left-grasp target. The 19x26 configs add the rule parameters, and 19x28 moves the left target 0.3 cm deeper along the left hand axis.
+
 ## Data format
 
 Each episode is exported to `.npz` (`demo_export.py`) and converted to a LeRobot dataset (`to_lerobot.py`), **20 Hz**.
@@ -116,6 +203,8 @@ Each episode is exported to `.npz` (`demo_export.py`) and converted to a LeRobot
 | `action` | 12 | next joint targets (10) + gripper commands (2) |
 
 The demonstration and augmented datasets are not stored in this repository (see Data availability).
+
+The `files` list in the `config/*assist*.json` files records which demonstrations the targets were computed from. It is not read at run time.
 
 ## Data availability
 

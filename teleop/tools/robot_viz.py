@@ -80,6 +80,7 @@ FLAG_NAMES = ("joint_clamp", "speed_lag", "reach_far", "collision", "yaw_hold", 
 TABLE_LIFT_CM = 0.2
 PAIR_GATE_RAMP_S = 0.3    # 16-d: 그림용 쌍 매핑 잠금이 바뀔 때 0 ↔ 1 로 가는 시간 (초)
 TABLE_PERIOD = 1.0        # RVT1 주기 (초)
+TABLE_PERIOD_TOP = 0.1    # 19-x12: top 가상 캔은 G0 원 그림 보정 (손 따라감) 을 RVT1 로 보내므로 10 Hz (패킷 76 + 48 × 자리 수 ≤ 652 바이트 → 6.5 kB/s)
 LAG_RAD = math.radians(3.0)
 NEAR_RAD = math.radians(2.0)
 # 거리 여유 1 cm: 너무 가까이 접음(비트 10)은 rmin − 1 cm 미만 (2026-10-21, 구현 보고서 §4.2).
@@ -130,6 +131,8 @@ class RobotViz:
         self._gate = 0.0                                       # 지금 잠금 비율 (0 = 그림 w 0, 1 = 실제 w)
         self._gate_t: Optional[float] = None
         self.last_pair_w = 0.0                                 # 마지막으로 보낸 그림 w (확인용)
+        self.table_period = TABLE_PERIOD                       # 19-x12: 워치독이 top 가상 캔이면 TABLE_PERIOD_TOP 로 (기본 그대로 1 초)
+        self.frames: Dict[str, dict] = {}                      # 19-x11: 마지막 패킷의 팔마다 Range · 어깨 (RVT1 Ps) · 손목 · 손 축 (원시 틀). 보내는 값은 그대로
 
     # ------------------------------------------------------------------ FK
     def fk(self, side: str, motor_vals: Dict[str, float]):
@@ -154,7 +157,7 @@ class RobotViz:
 
     def tick(self, now: float, motor, pos_runner, frame, frame_bones, *, hold: bool, tracking_ok: bool, gripper=None) -> None:
         """시간이 되었으면 패킷을 만들어 보낸다. 예외는 여기서 삼킨다 (제어 루프 보호)."""
-        if self.table is not None and now - self.table_last_t >= TABLE_PERIOD:
+        if self.table is not None and now - self.table_last_t >= self.table_period:
             self.table_last_t = now
             self.send_table()
         if not self.due(now):
@@ -303,6 +306,8 @@ class RobotViz:
             self._gate = min(self._gate + step, want) if want > self._gate else max(self._gate - step, want)
             w *= self._gate
         self.last_pair_w = w
+        self.frames = {s: {"rng": a["rng"], "ps": self.models[s].shoulder_center() * 100.0 if s in self.models else NAN3,
+                           "wr": a["pts"][2], "ax": a["dirs"][0]} for s, a in arms.items()}   # 19-x11 (쌍 이동 전 = w 0 그림)
         if w > 0 and all(s in arms and arms[s]["P"] is not None for s in ("left", "right")):
             c = 0.5 * (arms["left"]["tip"] + arms["right"]["tip"])
             mid = 0.5 * (arms["left"]["P"](c) + arms["right"]["P"](c))

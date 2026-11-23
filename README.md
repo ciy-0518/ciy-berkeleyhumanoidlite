@@ -2,7 +2,7 @@
 
 Robot-free VR digital-twin teleoperation → object-centric augmentation → ACT for bimanual can handover on Berkeley Humanoid Lite (5-DoF arms).
 
-This repository is a fork of the Berkeley Humanoid Lite low-level control code, extended with the teleoperation bridge, virtual-can demonstration recording, data augmentation, ACT training/inference scripts and real-robot evaluation tools used in our paper. The Unreal Engine project (VR scene, digital twin, virtual can) is available on request.
+This repository is a fork of the Berkeley Humanoid Lite low-level control code, extended with the teleoperation bridge, virtual-can demonstration recording, data augmentation, ACT training/inference scripts and real-robot evaluation tools used in our paper. The Unreal Engine source for the VR side (tracking sender, digital twin, virtual can) is in [`unreal/`](unreal/).
 
 > Note: most code comments and command-line help strings are in Korean.
 
@@ -47,6 +47,7 @@ teleop/
     run sheets:    top_shift_prep.py  top_policy_prep.py
     evaluation:    eval_pairs.py  eval_plot.py  top19x_plan.py
     pipelines:     anypos_c2.sh  handover_g.sh  handover_j.sh  top19x.sh  top19x_trim.sh  learn_run.sh
+unreal/                        Unreal Engine 5.6 C++ source for the VR side (tracking sender, robot-viz); no assets
 docs/UPSTREAM_README.md        original Berkeley Humanoid Lite low-level README (installation, CAN, motors)
 ```
 
@@ -67,15 +68,17 @@ mkdir -p ~/teleop-docs/_teleop/logs ~/cc_analysis                     # recordin
 
 - Robot control: follow [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md) (`pip install -r requirements.txt`, can-utils).
 - Training: a separate virtual environment at `~/venvs/learn` built from [teleop/learn/requirements_learn.txt](teleop/learn/requirements_learn.txt).
-- Server PC: runs the Unreal Engine 5.6 project (available on request) and `teleop/tools/cue_player.py` for voice cues.
+- Server PC: runs the Unreal Engine 5.6 project (source in [`unreal/`](unreal/)) and `teleop/tools/cue_player.py` for voice cues.
 
 **Network addresses — change these for your environment.** The code contains the IP addresses of our lab machines as defaults:
 
 | Where | Value in this repo | Meaning |
 |---|---|---|
-| `teleop/run.sh` (`SERVER=`) | `100.85.65.19` | server PC (voice cues :5021, robot-viz :5022) |
-| `teleop/tools/replay_run.py` (`DEFAULTS`) | `100.85.65.19` | same, for replay / policy runs |
-| Unreal project sender setting | `192.168.0.65:5000` | robot PC address the UE project sends hand data to |
+| `teleop/run.sh` (`SERVER=`) | `SERVER_PC_IP` (placeholder) | server PC (voice cues :5021, robot-viz :5022) |
+| `teleop/tools/replay_run.py` (`DEFAULTS`) | `SERVER_PC_IP` (placeholder) | same, for replay / policy runs |
+| `unreal/` BodyTrackingSender `RemoteIp` | `ROBOT_PC_IP` (placeholder) | robot PC address the UE project sends hand data to |
+
+Replace the placeholders with your own addresses.
 
 The robot PC listens on `0.0.0.0:5000`, so only the sender side and `SERVER=` need to match your network. Command-line options (`--cue-sound`, `--robot-viz`) override the defaults.
 
